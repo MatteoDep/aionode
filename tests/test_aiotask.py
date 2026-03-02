@@ -13,6 +13,7 @@ from aiotask import (
     log,
     make_async,
     make_async_generator,
+    remove_task,
     track_task,  # not in __all__ but part of the public surface
     wait_for,
 )
@@ -623,3 +624,100 @@ class TestGetTaskHelpers:
         tasks = [asyncio.create_task(track_task(coro)()) for _ in range(5)]
         await asyncio.gather(*tasks)
         assert len(ids) == len(set(ids))
+
+
+# ---------------------------------------------------------------------------
+# remove_task
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveTask:
+    async def test_remove_task_raises_for_unknown_id(self) -> None:
+        # Run a tracked task first so the loop state is initialised
+        async def coro() -> None:
+            pass
+
+        task = asyncio.create_task(track_task(coro)())
+        await task
+
+        with pytest.raises(ValueError, match="No task with id"):
+            remove_task(999_999)
+
+    async def test_remove_task_makes_get_task_info_raise(self) -> None:
+        async def coro() -> None:
+            pass
+
+        task = asyncio.create_task(track_task(coro)())
+        await task
+        await _flush()
+
+        task_id = await get_task_id(task)
+        remove_task(task_id)
+
+        with pytest.raises(ValueError, match="No task with id"):
+            get_task_info(task_id)
+
+    async def test_remove_task_clears_task_id_mapping(self) -> None:
+        async def coro() -> None:
+            pass
+
+        task = asyncio.create_task(track_task(coro)())
+        await task
+        await _flush()
+
+        task_id = await get_task_id(task)
+        remove_task(task_id)
+
+        # get_task_id polls until task appears in task_ids; after removal it must time out
+        with pytest.raises(TimeoutError):
+            await get_task_id(task, timeout=0.05)
+
+    async def test_remove_task_removes_descendants(self) -> None:
+        child_id_holder: list[int] = []
+        grandchild_id_holder: list[int] = []
+
+        async def grandchild_coro() -> None:
+            grandchild_id_holder.append(await get_task_id(_current_task()))
+
+        async def child_coro() -> None:
+            child_id_holder.append(await get_task_id(_current_task()))
+            await asyncio.create_task(track_task(grandchild_coro)())
+
+        async def parent_coro() -> None:
+            await asyncio.create_task(track_task(child_coro)())
+
+        task = asyncio.create_task(track_task(parent_coro)())
+        await task
+        await _flush()
+
+        parent_id = await get_task_id(task)
+        child_id = child_id_holder[0]
+        grandchild_id = grandchild_id_holder[0]
+
+        remove_task(parent_id)
+
+        for tid in (parent_id, child_id, grandchild_id):
+            with pytest.raises(ValueError):
+                get_task_info(tid)
+
+    async def test_remove_child_does_not_affect_parent(self) -> None:
+        child_id_holder: list[int] = []
+
+        async def child_coro() -> None:
+            child_id_holder.append(await get_task_id(_current_task()))
+
+        async def parent_coro() -> None:
+            await asyncio.create_task(track_task(child_coro)())
+
+        task = asyncio.create_task(track_task(parent_coro)())
+        await task
+        await _flush()
+
+        parent_id = await get_task_id(task)
+        child_id = child_id_holder[0]
+
+        remove_task(child_id)
+
+        # Parent info must still be accessible
+        info = get_task_info(parent_id)
+        assert info.id == parent_id

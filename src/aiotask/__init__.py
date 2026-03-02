@@ -276,16 +276,17 @@ def remove_task(task_id: int) -> None:
     """Remove a task and all its descendants from tracking to free memory."""
     loop = asyncio.get_running_loop()
     state = _loop_states[loop]
-    try:
-        task_info = state.task_infos[task_id]
-    except KeyError:
+    if task_id not in state.task_infos:
         msg = f"No task with id {task_id!r} found in the current event loop."
-        raise ValueError(msg) from None
-    for child_id in task_info.children:
-        if child_id in state.task_infos:
-            remove_task(child_id)
-    del state.task_infos[task_id]
-    state.task_ids.pop(task_info.task, None)
+        raise ValueError(msg)
+    stack = [task_id]
+    while stack:
+        tid = stack.pop()
+        task_info = state.task_infos.pop(tid, None)
+        if task_info is None:
+            continue
+        state.task_ids.pop(task_info.task, None)
+        stack.extend(task_info.children)
 
 
 def track_task[**P, R](
