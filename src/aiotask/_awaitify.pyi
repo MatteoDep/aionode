@@ -4,65 +4,149 @@ from typing import Any, overload
 
 # --- 0 parameters ---
 @overload
-def awaitify[R](func: Callable[[], Coroutine[Any, Any, R]]) -> Callable[[], Coroutine[Any, Any, R]]: ...
+def awaitify[R](
+    func: Callable[[], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
+) -> Callable[[], Coroutine[Any, Any, R]]: ...
+
 @overload
-def awaitify[R](func: Callable[[], R]) -> Callable[[], Coroutine[Any, Any, R]]: ...
+def awaitify[R](
+    func: Callable[[], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
+) -> Callable[[], Coroutine[Any, Any, R]]: ...
 
 # --- 1 parameter ---
 @overload
 def awaitify[T1, R](
     func: Callable[[T1], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[[T1 | Awaitable[T1]], Coroutine[Any, Any, R]]: ...
+
 @overload
-def awaitify[T1, R](func: Callable[[T1], R]) -> Callable[[T1 | Awaitable[T1]], Coroutine[Any, Any, R]]: ...
+def awaitify[T1, R](
+    func: Callable[[T1], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
+) -> Callable[[T1 | Awaitable[T1]], Coroutine[Any, Any, R]]: ...
 
 # --- 2 parameters ---
 @overload
 def awaitify[T1, T2, R](
     func: Callable[[T1, T2], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[[T1 | Awaitable[T1], T2 | Awaitable[T2]], Coroutine[Any, Any, R]]: ...
+
 @overload
 def awaitify[T1, T2, R](
     func: Callable[[T1, T2], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[[T1 | Awaitable[T1], T2 | Awaitable[T2]], Coroutine[Any, Any, R]]: ...
 
 # --- 3 parameters ---
 @overload
 def awaitify[T1, T2, T3, R](
     func: Callable[[T1, T2, T3], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[[T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3]], Coroutine[Any, Any, R]]: ...
+
 @overload
 def awaitify[T1, T2, T3, R](
     func: Callable[[T1, T2, T3], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[[T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3]], Coroutine[Any, Any, R]]: ...
 
 # --- 4 parameters ---
 @overload
 def awaitify[T1, T2, T3, T4, R](
     func: Callable[[T1, T2, T3, T4], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
-    [T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3], T4 | Awaitable[T4]], Coroutine[Any, Any, R]
+    [
+        T1 | Awaitable[T1],
+        T2 | Awaitable[T2],
+        T3 | Awaitable[T3],
+        T4 | Awaitable[T4],
+    ],
+    Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, R](
     func: Callable[[T1, T2, T3, T4], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
-    [T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3], T4 | Awaitable[T4]], Coroutine[Any, Any, R]
+    [
+        T1 | Awaitable[T1],
+        T2 | Awaitable[T2],
+        T3 | Awaitable[T3],
+        T4 | Awaitable[T4],
+    ],
+    Coroutine[Any, Any, R],
 ]: ...
 
 # --- 5 parameters ---
 @overload
 def awaitify[T1, T2, T3, T4, T5, R](
     func: Callable[[T1, T2, T3, T4, T5], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
-    [T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3], T4 | Awaitable[T4], T5 | Awaitable[T5]],
+    [
+        T1 | Awaitable[T1],
+        T2 | Awaitable[T2],
+        T3 | Awaitable[T3],
+        T4 | Awaitable[T4],
+        T5 | Awaitable[T5],
+    ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, R](
     func: Callable[[T1, T2, T3, T4, T5], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
-    [T1 | Awaitable[T1], T2 | Awaitable[T2], T3 | Awaitable[T3], T4 | Awaitable[T4], T5 | Awaitable[T5]],
+    [
+        T1 | Awaitable[T1],
+        T2 | Awaitable[T2],
+        T3 | Awaitable[T3],
+        T4 | Awaitable[T4],
+        T5 | Awaitable[T5],
+    ],
     Coroutine[Any, Any, R],
 ]: ...
 
@@ -70,6 +154,10 @@ def awaitify[T1, T2, T3, T4, T5, R](
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, R](
     func: Callable[[T1, T2, T3, T4, T5, T6], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -81,9 +169,14 @@ def awaitify[T1, T2, T3, T4, T5, T6, R](
     ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, R](
     func: Callable[[T1, T2, T3, T4, T5, T6], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -100,6 +193,10 @@ def awaitify[T1, T2, T3, T4, T5, T6, R](
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -112,9 +209,14 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, R](
     ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -132,6 +234,10 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, R](
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -145,9 +251,14 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, R](
     ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -166,6 +277,10 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, R](
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8, T9], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -180,9 +295,14 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, R](
     ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8, T9], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -202,6 +322,10 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, R](
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], Coroutine[Any, Any, R]],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -217,9 +341,14 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, R](
     ],
     Coroutine[Any, Any, R],
 ]: ...
+
 @overload
 def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, R](
     func: Callable[[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], R],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
 ) -> Callable[
     [
         T1 | Awaitable[T1],
@@ -238,5 +367,18 @@ def awaitify[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, R](
 
 # --- fallback ---
 @overload
-def awaitify(func: Callable[..., Any]) -> Callable[..., Coroutine[Any, Any, Any]]: ...
-def awaitify(func: Any) -> Any: ...
+def awaitify(
+    func: Callable[..., Any],
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
+) -> Callable[..., Coroutine[Any, Any, Any]]: ...
+
+def awaitify(
+    func: Any,
+    /,
+    *wait_for: Awaitable[Any],
+    track: bool = ...,
+    auto_progress: bool = ...,
+) -> Any: ...

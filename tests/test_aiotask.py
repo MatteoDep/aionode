@@ -787,5 +787,5 @@ class TestAwaitify:
         name_fut: asyncio.Future[str] = loop.create_future()
         name_fut.set_result("world")
 
-        result = await awaitify(greet)(name=name_fut, greeting="Hi")
+        result = await awaitify(greet)(name=name_fut, greeting="Hi")  # type: ignore[missing-argument, unknown-argument]
         assert result == "Hi, world!"
