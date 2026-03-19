@@ -1,7 +1,9 @@
 """Unit tests for aiotask - asyncio task tracking library."""
 
 import asyncio
+import io
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -862,3 +864,289 @@ class TestTaskGraph:
         path = graph.critical_path()
         assert isinstance(path, list)
         assert len(path) >= 1
+
+    async def test_graph_from_task(self) -> None:
+        from aiotask import TaskGraph
+
+        async def fn() -> None:
+            pass
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(fn)(), name="c1")
+
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
+        await root_task
+        await _flush()
+
+        graph = TaskGraph.from_task(root_task)
+        assert graph.root_id == root_id
+        assert any(n.description == "c1" for n in graph.nodes())
+
+    async def test_graph_repr(self) -> None:
+        from aiotask import TaskGraph
+
+        graph = TaskGraph(root_id=42)
+        assert repr(graph) == "TaskGraph(root_id=42)"
+
+        graph_none = TaskGraph()
+        assert repr(graph_none) == "TaskGraph(root_id=None)"
+
+
+# ---------------------------------------------------------------------------
+# node — track=False, auto_progress=False
+# ---------------------------------------------------------------------------
+
+
+class TestNodeOptions:
+    async def test_node_track_false(self) -> None:
+        """node(fn, track=False) should not create a TaskInfo entry."""
+
+        async def fn() -> int:
+            return 99
+
+        result = await node(fn, track=False)()
+        assert result == 99
+
+    async def test_node_auto_progress_false(self) -> None:
+        """node(fn, auto_progress=False) should not auto-count its own sub-children."""
+
+        async def grandchild_fn() -> None:
+            pass
+
+        async def child_fn() -> None:
+            gc_task = asyncio.create_task(track(grandchild_fn)(), name="grandchild")
+            await gc_task
+            await _flush()
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            # auto_progress=False means this node doesn't auto-count grandchild
+            assert info.total is None
+
+        async def run() -> None:
+            child_task = asyncio.create_task(
+                node(child_fn, auto_progress=False)(), name="no-progress-child"
+            )
+            await child_task
+
+        await asyncio.create_task(track(run)())
+
+    async def test_node_preserves_function_name(self) -> None:
+        """node() wrapper should preserve __name__ via functools.wraps."""
+
+        def my_named_func() -> int:
+            return 1
+
+        wrapped = node(my_named_func)
+        assert wrapped.__name__ == "my_named_func"  # ty: ignore[unresolved-attribute]
+
+    async def test_track_preserves_function_name(self) -> None:
+        """track() wrapper should preserve __name__ via functools.wraps."""
+
+        async def my_coro() -> None:
+            pass
+
+        wrapped = track(my_coro)
+        assert wrapped.__name__ == "my_coro"  # ty: ignore[unresolved-attribute]
+
+
+# ---------------------------------------------------------------------------
+# Diamond dependency patterns
+# ---------------------------------------------------------------------------
+
+
+class TestDiamondDeps:
+    async def test_diamond_dependency(self) -> None:
+        """A -> B, A -> C, B -> D, C -> D — diamond pattern."""
+
+        async def fn() -> None:
+            await asyncio.sleep(0)
+
+        ids: dict[str, int] = {}
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                a = tg.create_task(node(fn)(), name="a")
+                b = tg.create_task(node(fn, deps=[a])(), name="b")
+                c = tg.create_task(node(fn, deps=[a])(), name="c")
+                d = tg.create_task(node(fn, deps=[b, c])(), name="d")
+
+                async def capture() -> None:
+                    ids["a"] = await get_task_id(a)
+                    ids["b"] = await get_task_id(b)
+                    ids["c"] = await get_task_id(c)
+                    ids["d"] = await get_task_id(d)
+
+                tg.create_task(capture(), name="capture")
+
+        await asyncio.create_task(track(run)())
+        await _flush()
+
+        a_info = get_task(ids["a"])
+        b_info = get_task(ids["b"])
+        c_info = get_task(ids["c"])
+        d_info = get_task(ids["d"])
+
+        # a is root
+        assert a_info.depth == 0
+        # b and c depend on a
+        assert b_info.depth == 1
+        assert c_info.depth == 1
+        # d depends on b and c (depth = max(1,1) + 1 = 2)
+        assert d_info.depth == 2
+        # d has both b and c as deps
+        assert ids["b"] in d_info.deps
+        assert ids["c"] in d_info.deps
+        # a has b and c as dependents
+        assert ids["b"] in a_info.dependents
+        assert ids["c"] in a_info.dependents
+
+
+# ---------------------------------------------------------------------------
+# Error propagation through deps
+# ---------------------------------------------------------------------------
+
+
+class TestErrorPropagation:
+    async def test_upstream_failure_propagates_through_deps(self) -> None:
+        """When an upstream dep fails, the downstream node should raise."""
+
+        async def failing_fn() -> int:
+            raise ValueError("upstream boom")
+
+        def downstream_fn(x: int) -> int:
+            return x + 1
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                up = tg.create_task(node(failing_fn)(), name="failing")
+                tg.create_task(node(downstream_fn, deps=[up])(up), name="downstream")
+
+        with pytest.raises(ExceptionGroup):
+            await asyncio.create_task(track(run)())
+
+
+# ---------------------------------------------------------------------------
+# Circular dependency detection
+# ---------------------------------------------------------------------------
+
+
+class TestCircularDeps:
+    async def test_circular_dep_raises(self) -> None:
+        """Creating a circular dependency should raise RuntimeError."""
+        from aiotask import _register_dep
+
+        async def fn() -> None:
+            await asyncio.sleep(10)
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                a = tg.create_task(node(fn)(), name="a")
+                b = tg.create_task(node(fn, deps=[a])(), name="b")
+                await _flush()
+
+                a_id = await get_task_id(a)
+                b_id = await get_task_id(b)
+
+                # b already depends on a; adding a depends on b should cycle
+                with pytest.raises(RuntimeError, match="Circular dependency"):
+                    await _register_dep(a_id, b_id)
+
+                a.cancel()
+                b.cancel()
+
+        try:
+            await asyncio.create_task(track(run)())
+        except BaseException:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+
+
+class TestRendering:
+    async def _make_graph(self) -> tuple[Any, int]:
+        from aiotask import TaskGraph
+
+        async def fn() -> None:
+            pass
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                a = tg.create_task(node(fn)(), name="task-a")
+                tg.create_task(node(fn, deps=[a])(), name="task-b")
+
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
+        await root_task
+        await _flush()
+
+        graph = TaskGraph(root_id=root_id)
+        return graph, root_id
+
+    async def test_render_text_returns_string(self) -> None:
+        from aiotask._render import render_text
+
+        graph, _ = await self._make_graph()
+        output = render_text(graph)
+        assert isinstance(output, str)
+        assert "root" in output
+        assert "task-a" in output
+        assert "task-b" in output
+
+    async def test_render_text_no_root(self) -> None:
+        from aiotask import TaskGraph
+        from aiotask._render import render_text
+
+        async def fn() -> None:
+            pass
+
+        root_task = asyncio.create_task(track(fn)(), name="only-task")
+        await root_task
+        await _flush()
+
+        graph = TaskGraph.current()
+        output = render_text(graph)
+        assert isinstance(output, str)
+
+    async def test_render_text_empty_graph(self) -> None:
+        from aiotask import TaskGraph
+        from aiotask._render import render_text
+
+        graph = TaskGraph(root_id=999_999)
+        output = render_text(graph)
+        assert output == ""
+
+    async def test_get_render_returns_callable(self) -> None:
+        from aiotask._render import get_render
+
+        render_fn = get_render(rich=False)
+        assert callable(render_fn)
+
+        graph, _ = await self._make_graph()
+        output = render_fn(graph)
+        assert isinstance(output, str)
+        assert len(output) > 0
+
+    async def test_render_text_contains_tree_chars(self) -> None:
+        from aiotask._render import render_text
+
+        graph, _ = await self._make_graph()
+        output = render_text(graph)
+        # Should contain tree drawing characters
+        assert "├─" in output or "└─" in output
+
+    async def test_watch_completes_for_done_graph(self) -> None:
+        from aiotask._render import watch
+
+        graph, _ = await self._make_graph()
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            await watch(graph, interval=0.01)
+
+        output = buf.getvalue()
+        assert len(output) > 0

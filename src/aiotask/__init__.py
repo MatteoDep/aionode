@@ -19,15 +19,19 @@ from ._awaitify import node
 
 
 class TaskStatus(StrEnum):
+    """Status of a tracked asyncio task."""
+
     WAITING = "waiting to start"
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
-    CANCELLED = "canceled"
+    CANCELLED = "cancelled"
 
 
 @dataclass(slots=True)
 class TaskInfo:
+    """Metadata and state for a single tracked asyncio task."""
+
     id: int
     task: asyncio.Task
     description: str
@@ -76,9 +80,13 @@ class TaskInfo:
         sep: str = "\n",
         all_children: bool = False,
     ) -> str:
-        return sep.join(
-            [fmt(get_task(child_id)) for child_id in (self.children if all_children else self.running_children)]
-        )
+        items: list[str] = []
+        for child_id in self.children if all_children else self.running_children:
+            try:
+                items.append(fmt(get_task(child_id)))
+            except ValueError:
+                continue
+        return sep.join(items)
 
     def started(self) -> bool:
         return self.started_at is not None
@@ -261,6 +269,26 @@ async def _start_task() -> None:
             parent_info.running_children.append(task_id)
 
 
+def _would_cycle(state: _LoopState, from_id: int, to_id: int) -> bool:
+    """Return True if adding edge from_id -> to_id would create a cycle."""
+    visited: set[int] = set()
+    stack = [from_id]
+    while stack:
+        tid = stack.pop()
+        if tid == to_id:
+            continue
+        if tid in visited:
+            continue
+        visited.add(tid)
+        info = state.task_infos.get(tid)
+        if info is not None:
+            for dep_id in info.dependents:
+                if dep_id == to_id:
+                    return True
+                stack.append(dep_id)
+    return False
+
+
 async def _register_dep(from_id: int, to_id: int) -> None:
     """Register a dependency edge: from_id depends on to_id."""
     state = _get_state()
@@ -268,6 +296,11 @@ async def _register_dep(from_id: int, to_id: int) -> None:
     to_info = state.task_infos.get(to_id)
     if from_info is None or to_info is None:
         return
+    if _would_cycle(state, from_id, to_id):
+        from_desc = from_info.description
+        to_desc = to_info.description
+        msg = f"Circular dependency detected: {from_desc!r} -> {to_desc!r} would create a cycle."
+        raise RuntimeError(msg)
     async with from_info.allow_edit():
         if to_id not in from_info.deps:
             from_info.deps.append(to_id)

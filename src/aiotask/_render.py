@@ -16,7 +16,7 @@ _STATUS_LABEL: dict[str, str] = {
     "running": "running",
     "done": "done",
     "failed": "failed",
-    "canceled": "canceled",
+    "cancelled": "cancelled",
 }
 
 _STATUS_COLOR: dict[str, str] = {
@@ -24,7 +24,7 @@ _STATUS_COLOR: dict[str, str] = {
     "running": "33",           # yellow
     "done": "32",              # green
     "failed": "31",            # red
-    "canceled": "31",          # red
+    "cancelled": "31",         # red
 }
 
 BAR_WIDTH = 20
@@ -32,6 +32,8 @@ BAR_WIDTH = 20
 
 @dataclass
 class RenderConfig:
+    """Configuration for task graph rendering."""
+
     rich: bool | None = None
     bar_width: int = BAR_WIDTH
     bar_filled: str = "▰"
@@ -99,7 +101,7 @@ def _fmt_node(
             pass
     dep_str = f"  ← deps: {', '.join(dep_names)}" if dep_names else ""
 
-    return f"{prefix}{info.description:<10}  {label:<12}  {bar}  {progress:<8}  {duration}{dep_str}"
+    return f"{prefix}{info.description}  {label}  {bar}  {progress}  {duration}{dep_str}"
 
 
 def render_text(graph: TaskGraph, config: RenderConfig | None = None) -> str:
@@ -169,11 +171,13 @@ async def watch(
     render_fn = renderer if renderer is not None else get_render()
     last_line_count = 0
 
+    use_ansi = _use_color()
+
     while True:
         output = render_fn(graph)
         line_count = output.count("\n") + 1
 
-        if last_line_count > 0:
+        if use_ansi and last_line_count > 0:
             sys.stdout.write(f"\033[{last_line_count}A\033[J")
 
         sys.stdout.write(output + "\n")

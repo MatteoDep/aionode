@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -8,12 +9,17 @@ if TYPE_CHECKING:
 
 
 class TaskGraph:
+    """Dependency graph over tracked asyncio tasks."""
+
     def __init__(self, root_id: int | None = None) -> None:
         self._root_id = root_id
 
     @property
     def root_id(self) -> int | None:
         return self._root_id
+
+    def __repr__(self) -> str:
+        return f"TaskGraph(root_id={self._root_id})"
 
     def _state(self) -> _LoopState:
         from aiotask import _get_state
@@ -97,10 +103,7 @@ class TaskGraph:
 
     def summary(self) -> dict[TaskStatus, int]:
         """Count of nodes per status."""
-        counts: dict[TaskStatus, int] = {}
-        for n in self.nodes():
-            counts[n.status] = counts.get(n.status, 0) + 1
-        return counts
+        return dict(Counter(n.status for n in self.nodes()))
 
     def critical_path(self) -> list[TaskInfo]:
         """Longest-duration path (by accumulated elapsed time) from a root to a leaf."""
