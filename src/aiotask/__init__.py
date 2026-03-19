@@ -2,6 +2,7 @@ import asyncio
 import functools
 import inspect
 import threading
+import time
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Concatenate, Protocol, cast, runtime_checkable
 
-from ._awaitify import awaitify
+from ._awaitify import node
 
 
 class TaskStatus(StrEnum):
@@ -38,11 +39,16 @@ class TaskInfo:
     completed: float = 0
     total: float | None = None
     auto_progress: bool = True
+    deps: list[int] = field(default_factory=list)
+    dependents: list[int] = field(default_factory=list)
+    depth: int = 0
+    _start_mono: float | None = field(default=None, repr=False, compare=False)
+    _finish_mono: float | None = field(default=None, repr=False, compare=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     _edit_allowed: bool = field(default=False, repr=False, compare=False)
 
     def __setattr__(self, name: str, value: Any, /) -> None:
-        if name in ("_edit_allowed", "_lock"):
+        if name in ("_edit_allowed", "_lock", "_start_mono", "_finish_mono"):
             object.__setattr__(self, name, value)
             return
 
@@ -68,7 +74,7 @@ class TaskInfo:
         all_children=False,
     ) -> str:
         return sep.join(
-            [fmt(get_task_info(child_id)) for child_id in (self.children if all_children else self.running_children)]
+            [fmt(get_node(child_id)) for child_id in (self.children if all_children else self.running_children)]
         )
 
     def started(self) -> bool:
@@ -79,9 +85,10 @@ class TaskInfo:
 
     def duration(self) -> float:
         """Get task duration in seconds."""
-        if self.started_at is None:
+        if self._start_mono is None:
             return 0.0
-        return ((self.finished_at or datetime.now()) - self.started_at).total_seconds()
+        end = self._finish_mono if self._finish_mono is not None else time.monotonic()
+        return end - self._start_mono
 
 
 _task_id: ContextVar[int] = ContextVar("task_id")
@@ -119,6 +126,7 @@ async def _set_done(task_id: int) -> None:
     state = _get_state()
     task_info = state.task_infos[task_id]
     async with task_info.allow_edit():
+        task_info._finish_mono = time.monotonic()
         task_info.finished_at = datetime.now()
         if task_info.task.cancelled():
             task_info.status = TaskStatus.CANCELLED
@@ -199,6 +207,7 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         parent=parent_id,
         children=[],
         started_at=datetime.now() if start else None,
+        _start_mono=time.monotonic() if start else None,
         status=TaskStatus.RUNNING if start else TaskStatus.WAITING,
         task=task,
         running_children=[],
@@ -237,10 +246,29 @@ async def _start_task() -> None:
     task_id = _task_id.get()
     task_info = state.task_infos[task_id]
     async with task_info.allow_edit():
+        task_info._start_mono = time.monotonic()
         task_info.started_at = datetime.now()
         task_info.status = TaskStatus.RUNNING
         if task_info.parent is not None:
             state.task_infos[task_info.parent].running_children.append(task_id)
+
+
+async def _register_dep(from_id: int, to_id: int) -> None:
+    """Register a dependency edge: from_id depends on to_id."""
+    state = _get_state()
+    from_info = state.task_infos.get(from_id)
+    to_info = state.task_infos.get(to_id)
+    if from_info is None or to_info is None:
+        return
+    async with from_info.allow_edit():
+        if to_id not in from_info.deps:
+            from_info.deps.append(to_id)
+        new_depth = to_info.depth + 1
+        if new_depth > from_info.depth:
+            from_info.depth = new_depth
+    async with to_info.allow_edit():
+        if from_id not in to_info.dependents:
+            to_info.dependents.append(from_id)
 
 
 async def log(value: str = "", end="\n") -> None:
@@ -255,8 +283,8 @@ async def log(value: str = "", end="\n") -> None:
         task_info.logs += value + end
 
 
-async def get_task_id(task: asyncio.Task, timeout: float = 1) -> int:
-    """Get the task_id associated with a task."""
+async def get_node_id(task: asyncio.Task, timeout: float = 1) -> int:
+    """Get the node_id associated with a task."""
     state = _get_state()
     async with asyncio.timeout(timeout):
         while task not in state.task_ids:
@@ -264,7 +292,7 @@ async def get_task_id(task: asyncio.Task, timeout: float = 1) -> int:
         return state.task_ids[task]
 
 
-def get_task_info(task_id: int) -> TaskInfo:
+def get_node(task_id: int) -> TaskInfo:
     """Get the task info from a task_id."""
     loop = asyncio.get_running_loop()
     try:
@@ -274,8 +302,8 @@ def get_task_info(task_id: int) -> TaskInfo:
         raise ValueError(msg) from None
 
 
-def remove_task(task_id: int) -> None:
-    """Remove a task and all its descendants from tracking to free memory."""
+def remove_node(task_id: int) -> None:
+    """Remove a node and all its descendants from tracking to free memory."""
     loop = asyncio.get_running_loop()
     state = _loop_states[loop]
     if task_id not in state.task_infos:
@@ -291,7 +319,7 @@ def remove_task(task_id: int) -> None:
         stack.extend(task_info.children)
 
 
-def track_task[**P, R](
+def track[**P, R](
     func: Callable[P, Coroutine[Any, Any, R]],
     start: bool = True,
 ) -> Callable[P, Coroutine[Any, Any, R]]:
@@ -400,15 +428,31 @@ async def make_async_generator[T](gen: SupportsNext[T]) -> AsyncGenerator[T]:
 
 
 __all__ = [
+    "TaskGraph",
     "TaskInfo",
-    "awaitify",
-    "get_task_id",
-    "get_task_info",
-    "inject",
+    "TaskStatus",
+    "get_node",
+    "get_node_id",
     "log",
     "make_async",
     "make_async_generator",
-    "remove_task",
-    "track_task",
-    "wait_for",
+    "node",
+    "remove_node",
+    "render",
+    "render_text",
+    "track",
+    "watch",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "TaskGraph":
+        from aiotask._graph import TaskGraph as _TaskGraph
+
+        return _TaskGraph
+    if name in ("render_text", "render", "watch"):
+        import aiotask._render as _render
+
+        return getattr(_render, name)
+    msg = f"module 'aiotask' has no attribute {name!r}"
+    raise AttributeError(msg)
