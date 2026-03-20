@@ -11,20 +11,22 @@ if TYPE_CHECKING:
     from aiotask import TaskInfo
     from aiotask._graph import TaskGraph
 
-_STATUS_LABEL: dict[str, str] = {
-    "waiting to start": "waiting",
-    "running": "running",
-    "done": "done",
-    "failed": "failed",
-    "cancelled": "cancelled",
+from aiotask import TaskStatus
+
+_STATUS_LABEL: dict[TaskStatus, str] = {
+    TaskStatus.WAITING: "waiting",
+    TaskStatus.RUNNING: "running",
+    TaskStatus.DONE: "done",
+    TaskStatus.FAILED: "failed",
+    TaskStatus.CANCELLED: "cancelled",
 }
 
-_STATUS_COLOR: dict[str, str] = {
-    "waiting to start": "90",  # dark gray
-    "running": "33",           # yellow
-    "done": "32",              # green
-    "failed": "31",            # red
-    "cancelled": "31",         # red
+_STATUS_COLOR: dict[TaskStatus, str] = {
+    TaskStatus.WAITING: "90",  # dark gray
+    TaskStatus.RUNNING: "33",  # yellow
+    TaskStatus.DONE: "32",     # green
+    TaskStatus.FAILED: "31",   # red
+    TaskStatus.CANCELLED: "31",  # red
 }
 
 BAR_WIDTH = 20
@@ -80,10 +82,9 @@ def _fmt_node(
 ) -> str:
     if config is None:
         config = RenderConfig()
-    status_val = info.status.value
-    label = f"[{_STATUS_LABEL.get(status_val, status_val)}]"
+    label = f"[{_STATUS_LABEL.get(info.status, info.status.value)}]"
     if use_color:
-        label = _ansi(label, _STATUS_COLOR.get(status_val, "0"))
+        label = _ansi(label, _STATUS_COLOR.get(info.status, "0"))
 
     bar = _progress_bar(info.completed, info.total, config.bar_width, config.bar_filled, config.bar_empty)
     if use_color:
