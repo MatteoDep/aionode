@@ -40,7 +40,7 @@ class TaskGraph:
                 continue
             visited.add(tid)
             result.append(tid)
-            stack.extend(state.task_infos[tid].children)
+            stack.extend(state.task_infos[tid].subtasks)
         return result
 
     def nodes(self) -> list[TaskInfo]:

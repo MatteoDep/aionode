@@ -84,12 +84,25 @@ async def pipeline() -> None:
         )
 
 
-async def main() -> None:
+async def run_pipeline() -> tuple[asyncio.Task, aiotask.TaskGraph]:
     root = asyncio.create_task(aiotask.track(pipeline)(), name="ETL Pipeline")
     root_id = await aiotask.get_task_id(root)
     graph = aiotask.TaskGraph(root_id=root_id)
+    return root, graph
 
-    await aiotask.watch(graph, interval=0.3, renderer=aiotask.get_render(rich=False))
+
+async def main() -> None:
+    # Post-run: tree view (default)
+    print("\n── Tree view ───────────────────────────")
+    root, graph = await run_pipeline()
+    await aiotask.watch(graph, interval=0.3)
+    await root
+
+    # Post-run: DAG view
+    print("\n── DAG view ────────────────────────────")
+    dag_render = aiotask.get_render(rich=False, view="dag")
+    root, graph = await run_pipeline()
+    await aiotask.watch(graph, interval=0.3, renderer=dag_render)
     await root
 
     # Post-run graph inspection

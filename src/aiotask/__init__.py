@@ -36,8 +36,8 @@ class TaskInfo:
     task: asyncio.Task
     description: str
     parent: int | None
-    children: list[int]
-    running_children: list[int]
+    subtasks: list[int]
+    running_subtasks: list[int]
     status: TaskStatus
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -74,14 +74,14 @@ class TaskInfo:
             finally:
                 self._edit_allowed = False
 
-    def children_info(
+    def subtasks_info(
         self,
         fmt: Callable[[TaskInfo], str] = "- {0.description}: {0.status.value}".format,
         sep: str = "\n",
-        all_children: bool = False,
+        all_subtasks: bool = False,
     ) -> str:
         items: list[str] = []
-        for child_id in self.children if all_children else self.running_children:
+        for child_id in self.subtasks if all_subtasks else self.running_subtasks:
             try:
                 items.append(fmt(get_task(child_id)))
             except ValueError:
@@ -157,8 +157,8 @@ async def _update_parent(task_id: int, parent_id: int, auto_progress: bool) -> N
     async with parent_task_info.allow_edit():
         if auto_progress:
             parent_task_info.completed = (parent_task_info.completed or 0) + 1
-        if task_id in parent_task_info.running_children:
-            parent_task_info.running_children.remove(task_id)
+        if task_id in parent_task_info.running_subtasks:
+            parent_task_info.running_subtasks.remove(task_id)
 
 
 def _add_done_callback(task: asyncio.Task, task_id: int, state: _LoopState) -> None:
@@ -219,12 +219,12 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         id=task_id,
         description=task_name,
         parent=parent_id,
-        children=[],
+        subtasks=[],
         started_at=datetime.now() if start else None,
         _start_mono=time.monotonic() if start else None,
         status=TaskStatus.RUNNING if start else TaskStatus.WAITING,
         task=task,
-        running_children=[],
+        running_subtasks=[],
         auto_progress=auto_progress,
     )
 
@@ -234,9 +234,9 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         if parent_id is not None:
             parent_task_info = state.task_infos[parent_id]
             async with parent_task_info.allow_edit():
-                parent_task_info.children.append(task_id)
+                parent_task_info.subtasks.append(task_id)
                 if start:
-                    parent_task_info.running_children.append(task_id)
+                    parent_task_info.running_subtasks.append(task_id)
                 _add_update_parent_callback(
                     task,
                     task_id=task_id,
@@ -266,7 +266,7 @@ async def _start_task() -> None:
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
         async with parent_info.allow_edit():
-            parent_info.running_children.append(task_id)
+            parent_info.running_subtasks.append(task_id)
 
 
 def _would_cycle(state: _LoopState, from_id: int, to_id: int) -> bool:
@@ -357,7 +357,7 @@ def remove_task(task_id: int) -> None:
         if task_info is None:
             continue
         state.task_ids.pop(task_info.task, None)
-        stack.extend(task_info.children)
+        stack.extend(task_info.subtasks)
 
 
 def track[**P, R](

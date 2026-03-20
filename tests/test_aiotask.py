@@ -96,8 +96,8 @@ class TestTaskInfoMethods:
             task=task,
             description="tmp",
             parent=None,
-            children=[],
-            running_children=[],
+            subtasks=[],
+            running_subtasks=[],
             status=TaskStatus.WAITING,
         )
         # Override protection so we can leave started_at as None
@@ -146,8 +146,8 @@ class TestTaskInfoMethods:
             task=task,
             description="tmp",
             parent=None,
-            children=[],
-            running_children=[],
+            subtasks=[],
+            running_subtasks=[],
             status=TaskStatus.WAITING,
         )
         assert info.duration() == 0.0
@@ -309,7 +309,7 @@ class TestParentChild:
         await asyncio.create_task(track(parent_coro)())
         assert child_parent_holder == parent_id_holder
 
-    async def test_parent_children_list_populated(self) -> None:
+    async def test_parent_subtasks_list_populated(self) -> None:
         child_id_holder: list[int] = []
 
         async def child_coro() -> None:
@@ -320,7 +320,7 @@ class TestParentChild:
             await child_task
             task_id = await get_task_id(_current_task())
             info = get_task(task_id)
-            assert child_id_holder[0] in info.children
+            assert child_id_holder[0] in info.subtasks
 
         await asyncio.create_task(track(parent_coro)())
 
@@ -341,16 +341,16 @@ class TestParentChild:
 
         await asyncio.create_task(track(parent_coro)())
 
-    async def test_children_info_returns_string(self) -> None:
+    async def test_subtasks_info_returns_string(self) -> None:
         async def child_coro() -> None:
             await asyncio.sleep(0.01)
 
         async def parent_coro() -> None:
             child_task = asyncio.create_task(track(child_coro)())
-            await asyncio.sleep(0)  # let child start so it's in running_children
+            await asyncio.sleep(0)  # let child start so it's in running_subtasks
             task_id = await get_task_id(_current_task())
             info = get_task(task_id)
-            text = info.children_info()
+            text = info.subtasks_info()
             assert isinstance(text, str)
             await child_task
 
@@ -1138,6 +1138,23 @@ class TestRendering:
         output = render_text(graph)
         # Should contain tree drawing characters
         assert "├─" in output or "└─" in output
+
+    async def test_render_dag_view(self) -> None:
+        from aiotask._render import RenderConfig, render_text
+
+        graph, _ = await self._make_graph()
+        config = RenderConfig(view="dag")
+        output = render_text(graph, config)
+
+        assert isinstance(output, str)
+        assert "task-a" in output
+        assert "task-b" in output
+        # DAG view should not contain tree chars
+        assert "├─" not in output
+        assert "└─" not in output
+        assert "│" not in output
+        # task-b depends on task-a, so dep annotation should appear
+        assert "← deps:" in output
 
     async def test_watch_completes_for_done_graph(self) -> None:
         from aiotask._render import watch

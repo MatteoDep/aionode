@@ -5,7 +5,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from aiotask import TaskInfo
@@ -40,6 +40,7 @@ class RenderConfig:
     bar_width: int = BAR_WIDTH
     bar_filled: str = "▰"
     bar_empty: str = "▱"
+    view: Literal["tree", "dag"] = "tree"
 
 
 def _use_color() -> bool:
@@ -105,17 +106,12 @@ def _fmt_node(
     return f"{prefix}{info.description}  {label}  {bar}  {progress}  {duration}{dep_str}"
 
 
-def render_text(graph: TaskGraph, config: RenderConfig | None = None) -> str:
-    """Render graph as ANSI text tree."""
-    if config is None:
-        config = RenderConfig()
-    use_color = _use_color()
+def _render_tree(graph: TaskGraph, config: RenderConfig, use_color: bool) -> list[str]:
+    """Render as a subtask tree (root with nested children)."""
     nodes = graph.nodes()
     if not nodes:
-        return ""
-
+        return []
     lines: list[str] = []
-
     if graph.root_id is not None:
         root_list = [n for n in nodes if n.id == graph.root_id]
         rest = [n for n in nodes if n.id != graph.root_id]
@@ -132,7 +128,30 @@ def render_text(graph: TaskGraph, config: RenderConfig | None = None) -> str:
     else:
         for n in nodes:
             lines.append(_fmt_node(n, graph, use_color=use_color, config=config))
+    return lines
 
+
+def _render_dag(graph: TaskGraph, config: RenderConfig, use_color: bool) -> list[str]:
+    """Render as a flat dependency DAG in topological order."""
+    nodes = graph.nodes()  # already sorted by (depth, id)
+    if not nodes:
+        return []
+    lines: list[str] = []
+    for n in nodes:
+        indent = "  " * n.depth
+        lines.append(_fmt_node(n, graph, prefix=indent, use_color=use_color, config=config))
+    return lines
+
+
+def render_text(graph: TaskGraph, config: RenderConfig | None = None) -> str:
+    """Render graph as ANSI text."""
+    if config is None:
+        config = RenderConfig()
+    use_color = _use_color()
+    if config.view == "dag":
+        lines = _render_dag(graph, config, use_color)
+    else:
+        lines = _render_tree(graph, config, use_color)
     return "\n".join(lines)
 
 
@@ -142,9 +161,10 @@ def get_render(
     bar_width: int = BAR_WIDTH,
     bar_filled: str = "▰",
     bar_empty: str = "▱",
+    view: Literal["tree", "dag"] = "tree",
 ) -> Callable[[TaskGraph], str]:
     """Return a configured render callable."""
-    config = RenderConfig(rich=rich, bar_width=bar_width, bar_filled=bar_filled, bar_empty=bar_empty)
+    config = RenderConfig(rich=rich, bar_width=bar_width, bar_filled=bar_filled, bar_empty=bar_empty, view=view)
 
     def _render(graph: TaskGraph) -> str:
         if config.rich is not False:

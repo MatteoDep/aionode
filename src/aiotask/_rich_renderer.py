@@ -38,28 +38,39 @@ def render_rich(graph: TaskGraph, config: RenderConfig | None = None) -> str:
 
     nodes = graph.nodes()
 
-    if graph.root_id is not None:
+    if config.view == "dag":
+        ordered = [("  " * n.depth, n) for n in nodes]
+    elif graph.root_id is not None:
         root_list = [n for n in nodes if n.id == graph.root_id]
-        children = [n for n in nodes if n.id != graph.root_id]
-        ordered = [(root_list[0], "")] if root_list else []
-        for i, n in enumerate(children):
-            prefix = "└─ " if i == len(children) - 1 else "├─ "
-            ordered.append((n, prefix))
+        subtasks = [n for n in nodes if n.id != graph.root_id]
+        ordered = [("", root_list[0])] if root_list else []
+        for i, n in enumerate(subtasks):
+            prefix = "└─ " if i == len(subtasks) - 1 else "├─ "
+            ordered.append((prefix, n))
     else:
-        ordered = [(n, "") for n in nodes]
+        ordered = [("", n) for n in nodes]
 
-    for info, prefix in ordered:
+    for prefix, info in ordered:
         style = _STATUS_STYLE.get(info.status, "")
         bar = _progress_bar(info.completed, info.total, config.bar_width, config.bar_filled, config.bar_empty)
         total_str = str(int(info.total)) if info.total is not None else "?"
         progress = f"[blue]{bar}[/blue]  ({int(info.completed)}/{total_str})"
         duration = _fmt_duration(info)
 
+        dep_names: list[str] = []
+        if config.view == "dag":
+            for dep_id in info.deps:
+                try:
+                    dep_names.append(graph.node(dep_id).description)
+                except Exception:
+                    pass
+        dep_str = f"  ← {', '.join(dep_names)}" if dep_names else ""
+
         table.add_row(
             f"{prefix}{info.description}",
             f"[{style}]{info.status.value}[/{style}]",
             progress,
-            duration,
+            f"{duration}{dep_str}",
         )
 
     buf = io.StringIO()
