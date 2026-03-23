@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import threading
@@ -16,6 +18,13 @@ if TYPE_CHECKING:
     from aiotask._render import RenderConfig, get_render, watch
 
 from ._awaitify import node
+
+
+class _Unset:
+    """Sentinel for unset keyword arguments."""
+
+
+_UNSET = _Unset()
 
 
 class TaskStatus(StrEnum):
@@ -73,6 +82,22 @@ class TaskInfo:
                 yield
             finally:
                 self._edit_allowed = False
+
+    async def update(
+        self,
+        *,
+        description: str | _Unset = _UNSET,
+        completed: float | _Unset = _UNSET,
+        total: float | None | _Unset = _UNSET,
+    ) -> None:
+        """Update user-facing fields atomically."""
+        async with self.allow_edit():
+            if not isinstance(description, _Unset):
+                self.description = description
+            if not isinstance(completed, _Unset):
+                self.completed = completed
+            if not isinstance(total, _Unset):
+                self.total = total
 
     def subtasks_info(
         self,
@@ -419,7 +444,6 @@ __all__ = [
     "make_async_generator",
     "node",
     "remove_task",
-    "track",
     "watch",
 ]
 

@@ -16,7 +16,6 @@ from aiotask import (
     make_async_generator,
     node,
     remove_task,
-    track,
 )
 
 
@@ -53,7 +52,7 @@ class TestTaskInfoImmutability:
             with pytest.raises(RuntimeError, match="allow_edit"):
                 info.description = "new description"
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
     async def test_allow_edit_permits_write(self) -> None:
         """allow_edit context manager must permit field updates."""
@@ -65,7 +64,7 @@ class TestTaskInfoImmutability:
                 info.description = "updated"
             assert info.description == "updated"
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
     async def test_internal_fields_always_writable(self) -> None:
         """_edit_allowed and _lock can be set without the context manager."""
@@ -76,7 +75,7 @@ class TestTaskInfoImmutability:
             # Should not raise
             info._edit_allowed = info._edit_allowed
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
 
 # ---------------------------------------------------------------------------
@@ -112,10 +111,10 @@ class TestTaskInfoMethods:
         async def coro() -> None:
             task_id = await get_task_id(_current_task())
             info = get_task(task_id)
-            # track sets start=True by default
+            # node sets start=True after resolving deps
             assert info.started() is True
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
     async def test_done_false_while_running(self) -> None:
         async def coro() -> None:
@@ -123,13 +122,13 @@ class TestTaskInfoMethods:
             info = get_task(task_id)
             assert info.done() is False
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
     async def test_done_true_after_completion(self) -> None:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         await _flush()
 
@@ -164,13 +163,13 @@ class TestTaskInfoMethods:
             info = get_task(task_id)
             assert info.duration() > 0.0
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
     async def test_duration_frozen_after_completion(self) -> None:
         async def coro() -> None:
             await asyncio.sleep(0.01)
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         await _flush()
 
@@ -183,16 +182,82 @@ class TestTaskInfoMethods:
 
 
 # ---------------------------------------------------------------------------
-# track
+# TaskInfo.update()
 # ---------------------------------------------------------------------------
 
 
-class TestTrack:
+class TestTaskInfoUpdate:
+    async def test_update_description(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            await info.update(description="new label")
+            assert info.description == "new label"
+
+        await asyncio.create_task(node(coro)())
+
+    async def test_update_completed(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            await info.update(completed=5)
+            assert info.completed == 5
+
+        await asyncio.create_task(node(coro)())
+
+    async def test_update_total(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            await info.update(total=10)
+            assert info.total == 10
+
+        await asyncio.create_task(node(coro)())
+
+    async def test_update_multiple_fields(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            await info.update(description="step 3", completed=3, total=10)
+            assert info.description == "step 3"
+            assert info.completed == 3
+            assert info.total == 10
+
+        await asyncio.create_task(node(coro)())
+
+    async def test_update_total_none(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            await info.update(total=5)
+            await info.update(total=None)
+            assert info.total is None
+
+        await asyncio.create_task(node(coro)())
+
+    async def test_update_unset_fields_unchanged(self) -> None:
+        async def coro() -> None:
+            task_id = await get_task_id(_current_task())
+            info = get_task(task_id)
+            original_description = info.description
+            await info.update(completed=7)
+            assert info.description == original_description
+            assert info.completed == 7
+
+        await asyncio.create_task(node(coro)())
+
+
+# ---------------------------------------------------------------------------
+# node — core tracking behaviour (replaces old TestTrack)
+# ---------------------------------------------------------------------------
+
+
+class TestNodeCore:
     async def test_returns_coroutine_result(self) -> None:
         async def coro() -> int:
             return 42
 
-        result = await asyncio.create_task(track(coro)())
+        result = await asyncio.create_task(node(coro)())
         assert result == 42
 
     async def test_status_running_while_executing(self) -> None:
@@ -203,14 +268,14 @@ class TestTrack:
             info = get_task(task_id)
             seen_status.append(info.status)
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
         assert seen_status == [TaskStatus.RUNNING]
 
     async def test_status_done_after_completion(self) -> None:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         await _flush()
 
@@ -222,7 +287,7 @@ class TestTrack:
         async def failing_coro() -> None:
             raise ValueError("boom")
 
-        task = asyncio.create_task(track(failing_coro)())
+        task = asyncio.create_task(node(failing_coro)())
         with pytest.raises(ValueError, match="boom"):
             await task
         await _flush()
@@ -236,7 +301,7 @@ class TestTrack:
         async def slow_coro() -> None:
             await asyncio.sleep(10)
 
-        task = asyncio.create_task(track(slow_coro)())
+        task = asyncio.create_task(node(slow_coro)())
         await asyncio.sleep(0)  # let it start
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -254,7 +319,7 @@ class TestTrack:
             task_id = await get_task_id(_current_task())
             captured.append(task_id)
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
 
         task_id = await get_task_id(task)
@@ -265,24 +330,29 @@ class TestTrack:
 
         async def coro() -> None:
             # _init_task_info is called once by the wrapper; calling it again
-            # via a second track wrapper should raise.
+            # via a second node wrapper should raise.
             from aiotask import _init_task_info
 
             with pytest.raises(RuntimeError, match="already initialized"):
                 await _init_task_info()
 
-        await asyncio.create_task(track(coro)())
+        await asyncio.create_task(node(coro)())
 
-    async def test_start_false_yields_waiting_status(self) -> None:
-        seen: list[TaskStatus] = []
+    async def test_waiting_state_with_pending_wait_for(self) -> None:
+        """node() task is in WAITING while wait_for deps are unresolved."""
+        future: asyncio.Future[None] = asyncio.get_event_loop().create_future()
 
         async def coro() -> None:
-            task_id = await get_task_id(_current_task())
-            info = get_task(task_id)
-            seen.append(info.status)
+            pass
 
-        await asyncio.create_task(track(coro, start=False)())
-        assert seen == [TaskStatus.WAITING]
+        task = asyncio.create_task(node(coro, wait_for=[future])())
+        await asyncio.sleep(0)  # let task initialise
+        task_id = await get_task_id(task)
+        info = get_task(task_id)
+        assert info.status == TaskStatus.WAITING
+
+        future.set_result(None)
+        await task
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +373,10 @@ class TestParentChild:
         async def parent_coro() -> None:
             task_id = await get_task_id(_current_task())
             parent_id_holder.append(task_id)
-            child_task = asyncio.create_task(track(child_coro)())
+            child_task = asyncio.create_task(node(child_coro)())
             await child_task
 
-        await asyncio.create_task(track(parent_coro)())
+        await asyncio.create_task(node(parent_coro)())
         assert child_parent_holder == parent_id_holder
 
     async def test_parent_subtasks_list_populated(self) -> None:
@@ -316,13 +386,13 @@ class TestParentChild:
             child_id_holder.append(await get_task_id(_current_task()))
 
         async def parent_coro() -> None:
-            child_task = asyncio.create_task(track(child_coro)())
+            child_task = asyncio.create_task(node(child_coro)())
             await child_task
             task_id = await get_task_id(_current_task())
             info = get_task(task_id)
             assert child_id_holder[0] in info.subtasks
 
-        await asyncio.create_task(track(parent_coro)())
+        await asyncio.create_task(node(parent_coro)())
 
     async def test_auto_progress_updates_parent_total_and_completed(self) -> None:
         async def child_coro() -> None:
@@ -331,7 +401,7 @@ class TestParentChild:
         async def parent_coro() -> None:
             task_id = await get_task_id(_current_task())
 
-            child_task = asyncio.create_task(track(child_coro)())
+            child_task = asyncio.create_task(node(child_coro)())
             await child_task
             await _flush()
 
@@ -339,14 +409,14 @@ class TestParentChild:
             assert info.total == 1
             assert info.completed == 1
 
-        await asyncio.create_task(track(parent_coro)())
+        await asyncio.create_task(node(parent_coro)())
 
     async def test_subtasks_info_returns_string(self) -> None:
         async def child_coro() -> None:
             await asyncio.sleep(0.01)
 
         async def parent_coro() -> None:
-            child_task = asyncio.create_task(track(child_coro)())
+            child_task = asyncio.create_task(node(child_coro)())
             await asyncio.sleep(0)  # let child start so it's in running_subtasks
             task_id = await get_task_id(_current_task())
             info = get_task(task_id)
@@ -354,7 +424,7 @@ class TestParentChild:
             assert isinstance(text, str)
             await child_task
 
-        await asyncio.create_task(track(parent_coro)())
+        await asyncio.create_task(node(parent_coro)())
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +438,7 @@ class TestLog:
             await log("hello")
             await log("world")
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
 
         task_id = await get_task_id(task)
@@ -380,7 +450,7 @@ class TestLog:
         async def coro() -> None:
             await log("no-newline", end="")
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
 
         task_id = await get_task_id(task)
@@ -473,7 +543,7 @@ class TestGetTaskHelpers:
         async def coro() -> None:
             task_id_holder.append(await get_task_id(_current_task()))
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         assert len(task_id_holder) == 1
         assert isinstance(task_id_holder[0], int)
@@ -495,7 +565,7 @@ class TestGetTaskHelpers:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
 
         task_id = await get_task_id(task)
@@ -509,7 +579,7 @@ class TestGetTaskHelpers:
         async def coro() -> None:
             ids.append(await get_task_id(_current_task()))
 
-        tasks = [asyncio.create_task(track(coro)()) for _ in range(5)]
+        tasks = [asyncio.create_task(node(coro)()) for _ in range(5)]
         await asyncio.gather(*tasks)
         assert len(ids) == len(set(ids))
 
@@ -525,7 +595,7 @@ class TestRemoveTask:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
 
         with pytest.raises(ValueError, match="No task with id"):
@@ -535,7 +605,7 @@ class TestRemoveTask:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         await _flush()
 
@@ -549,7 +619,7 @@ class TestRemoveTask:
         async def coro() -> None:
             pass
 
-        task = asyncio.create_task(track(coro)())
+        task = asyncio.create_task(node(coro)())
         await task
         await _flush()
 
@@ -569,12 +639,12 @@ class TestRemoveTask:
 
         async def child_coro() -> None:
             child_id_holder.append(await get_task_id(_current_task()))
-            await asyncio.create_task(track(grandchild_coro)())
+            await asyncio.create_task(node(grandchild_coro)())
 
         async def parent_coro() -> None:
-            await asyncio.create_task(track(child_coro)())
+            await asyncio.create_task(node(child_coro)())
 
-        task = asyncio.create_task(track(parent_coro)())
+        task = asyncio.create_task(node(parent_coro)())
         await task
         await _flush()
 
@@ -595,9 +665,9 @@ class TestRemoveTask:
             child_id_holder.append(await get_task_id(_current_task()))
 
         async def parent_coro() -> None:
-            await asyncio.create_task(track(child_coro)())
+            await asyncio.create_task(node(child_coro)())
 
-        task = asyncio.create_task(track(parent_coro)())
+        task = asyncio.create_task(node(parent_coro)())
         await task
         await _flush()
 
@@ -677,15 +747,51 @@ class TestNode:
         result = await node(greet)(name=name_fut, greeting="Hi")  # type: ignore[missing-argument, unknown-argument]
         assert result == "Hi, world!"
 
+    async def test_node_awaitable_args_gathered_concurrently(self) -> None:
+        """All awaitable args are gathered concurrently, not sequentially."""
+        order: list[int] = []
+
+        async def slow(n: int) -> int:
+            await asyncio.sleep(0)
+            order.append(n)
+            return n
+
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        t1 = asyncio.create_task(slow(1))
+        t2 = asyncio.create_task(slow(2))
+        result = await node(add)(t1, t2)
+        assert result == 3
+
+    async def test_node_task_arg_without_wait_for(self) -> None:
+        """Passing a Task as arg registers the dep edge without explicit wait_for."""
+
+        async def upstream() -> int:
+            return 10
+
+        def downstream(x: int) -> int:
+            return x + 1
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                up = tg.create_task(node(upstream)(), name="up")
+                tg.create_task(node(downstream)(up), name="down")
+
+        from aiotask import track
+
+        await asyncio.create_task(track(run)())
+        await _flush()
+
 
 # ---------------------------------------------------------------------------
-# deps / dependents / depth
+# wait_for / dependents / depth
 # ---------------------------------------------------------------------------
 
 
 class TestDepEdges:
-    async def test_deps_populated_via_deps_param(self) -> None:
-        """node(fn, deps=[upstream]) should populate deps/dependents/depth."""
+    async def test_deps_populated_via_task_arg(self) -> None:
+        """Passing Task as arg registers deps/dependents/depth edges."""
 
         async def upstream_fn() -> int:
             return 1
@@ -699,9 +805,8 @@ class TestDepEdges:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 up = tg.create_task(node(upstream_fn)(), name="upstream")
-                down = tg.create_task(node(downstream_fn, deps=[up])(up), name="downstream")
+                down = tg.create_task(node(downstream_fn)(up), name="downstream")
 
-                # Capture ids after both tasks complete
                 async def capture() -> None:
                     up_id = await get_task_id(up)
                     down_id = await get_task_id(down)
@@ -709,6 +814,49 @@ class TestDepEdges:
                     downstream_ids.append(down_id)
 
                 tg.create_task(capture(), name="capture")
+
+        from aiotask import track
+
+        await asyncio.create_task(track(run)())
+        await _flush()
+
+        up_id = upstream_ids[0]
+        down_id = downstream_ids[0]
+
+        up_info = get_task(up_id)
+        down_info = get_task(down_id)
+
+        assert down_id in up_info.dependents
+        assert up_id in down_info.deps
+        assert down_info.depth == 1
+        assert up_info.depth == 0
+
+    async def test_deps_populated_via_wait_for(self) -> None:
+        """node(fn, wait_for=[upstream]) populates deps/dependents/depth."""
+
+        async def upstream_fn() -> int:
+            return 1
+
+        async def downstream_fn() -> int:
+            return 2
+
+        upstream_ids: list[int] = []
+        downstream_ids: list[int] = []
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                up = tg.create_task(node(upstream_fn)(), name="upstream")
+                down = tg.create_task(node(downstream_fn, wait_for=[up])(), name="downstream")
+
+                async def capture() -> None:
+                    up_id = await get_task_id(up)
+                    down_id = await get_task_id(down)
+                    upstream_ids.append(up_id)
+                    downstream_ids.append(down_id)
+
+                tg.create_task(capture(), name="capture")
+
+        from aiotask import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -736,9 +884,9 @@ class TestDepEdges:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn, deps=[])(), name="a")
-                b = tg.create_task(node(fn, deps=[a])(), name="b")
-                c = tg.create_task(node(fn, deps=[b])(), name="c")
+                a = tg.create_task(node(fn)(), name="a")
+                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
+                c = tg.create_task(node(fn, wait_for=[b])(), name="c")
 
                 async def capture() -> None:
                     a_ids.append(await get_task_id(a))
@@ -746,6 +894,8 @@ class TestDepEdges:
                     c_ids.append(await get_task_id(c))
 
                 tg.create_task(capture(), name="capture")
+
+        from aiotask import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -766,7 +916,7 @@ class TestDepEdges:
 
 class TestTaskGraph:
     async def test_graph_nodes_includes_all_children(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def child_fn() -> None:
             await asyncio.sleep(0)
@@ -793,21 +943,16 @@ class TestTaskGraph:
         assert "c2" in node_names
 
     async def test_graph_roots_and_leaves(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def fn() -> None:
             await asyncio.sleep(0)
 
-        a_task_holder: list[asyncio.Task] = []
-        c_task_holder: list[asyncio.Task] = []
-
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, deps=[a])(), name="b")
-                c = tg.create_task(node(fn, deps=[b])(), name="c")
-                a_task_holder.append(a)
-                c_task_holder.append(c)
+                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
+                tg.create_task(node(fn, wait_for=[b])(), name="c")
 
         root_task = asyncio.create_task(track(run)(), name="root")
         root_id = await get_task_id(root_task)
@@ -815,17 +960,14 @@ class TestTaskGraph:
         await _flush()
 
         graph = TaskGraph(root_id=root_id)
-        # root has no deps, a has no deps
         root_names = {n.description for n in graph.roots()}
         leaf_names = {n.description for n in graph.leaves()}
 
-        # root and a have no deps => roots
         assert "a" in root_names
-        # c has no dependents => leaf
         assert "c" in leaf_names
 
     async def test_graph_summary(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def fn() -> None:
             pass
@@ -845,7 +987,7 @@ class TestTaskGraph:
         assert summary.get(TaskStatus.DONE, 0) >= 1
 
     async def test_graph_critical_path_returns_list(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def fn() -> None:
             await asyncio.sleep(0.01)
@@ -853,7 +995,7 @@ class TestTaskGraph:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 a = tg.create_task(node(fn)(), name="a")
-                tg.create_task(node(fn, deps=[a])(), name="b")
+                tg.create_task(node(fn, wait_for=[a])(), name="b")
 
         root_task = asyncio.create_task(track(run)(), name="root")
         root_id = await get_task_id(root_task)
@@ -866,7 +1008,7 @@ class TestTaskGraph:
         assert len(path) >= 1
 
     async def test_graph_from_task(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def fn() -> None:
             pass
@@ -911,12 +1053,13 @@ class TestNodeOptions:
 
     async def test_node_auto_progress_false(self) -> None:
         """node(fn, auto_progress=False) should not auto-count its own sub-children."""
+        from aiotask import track
 
         async def grandchild_fn() -> None:
             pass
 
         async def child_fn() -> None:
-            gc_task = asyncio.create_task(track(grandchild_fn)(), name="grandchild")
+            gc_task = asyncio.create_task(node(grandchild_fn)(), name="grandchild")
             await gc_task
             await _flush()
             task_id = await get_task_id(_current_task())
@@ -941,15 +1084,6 @@ class TestNodeOptions:
         wrapped = node(my_named_func)
         assert wrapped.__name__ == "my_named_func"  # ty: ignore[unresolved-attribute]
 
-    async def test_track_preserves_function_name(self) -> None:
-        """track() wrapper should preserve __name__ via functools.wraps."""
-
-        async def my_coro() -> None:
-            pass
-
-        wrapped = track(my_coro)
-        assert wrapped.__name__ == "my_coro"  # ty: ignore[unresolved-attribute]
-
 
 # ---------------------------------------------------------------------------
 # Diamond dependency patterns
@@ -959,6 +1093,7 @@ class TestNodeOptions:
 class TestDiamondDeps:
     async def test_diamond_dependency(self) -> None:
         """A -> B, A -> C, B -> D, C -> D — diamond pattern."""
+        from aiotask import track
 
         async def fn() -> None:
             await asyncio.sleep(0)
@@ -968,9 +1103,9 @@ class TestDiamondDeps:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, deps=[a])(), name="b")
-                c = tg.create_task(node(fn, deps=[a])(), name="c")
-                d = tg.create_task(node(fn, deps=[b, c])(), name="d")
+                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
+                c = tg.create_task(node(fn, wait_for=[a])(), name="c")
+                d = tg.create_task(node(fn, wait_for=[b, c])(), name="d")
 
                 async def capture() -> None:
                     ids["a"] = await get_task_id(a)
@@ -1004,12 +1139,12 @@ class TestDiamondDeps:
 
 
 # ---------------------------------------------------------------------------
-# Error propagation through deps
+# Error propagation through wait_for
 # ---------------------------------------------------------------------------
 
 
 class TestErrorPropagation:
-    async def test_upstream_failure_propagates_through_deps(self) -> None:
+    async def test_upstream_failure_propagates(self) -> None:
         """When an upstream dep fails, the downstream node should raise."""
 
         async def failing_fn() -> int:
@@ -1021,10 +1156,10 @@ class TestErrorPropagation:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 up = tg.create_task(node(failing_fn)(), name="failing")
-                tg.create_task(node(downstream_fn, deps=[up])(up), name="downstream")
+                tg.create_task(node(downstream_fn)(up), name="downstream")
 
         with pytest.raises(ExceptionGroup):
-            await asyncio.create_task(track(run)())
+            await asyncio.create_task(node(run)())
 
 
 # ---------------------------------------------------------------------------
@@ -1035,7 +1170,7 @@ class TestErrorPropagation:
 class TestCircularDeps:
     async def test_circular_dep_raises(self) -> None:
         """Creating a circular dependency should raise RuntimeError."""
-        from aiotask import _register_dep
+        from aiotask import _register_dep, track
 
         async def fn() -> None:
             await asyncio.sleep(10)
@@ -1043,7 +1178,7 @@ class TestCircularDeps:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, deps=[a])(), name="b")
+                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
                 await _flush()
 
                 a_id = await get_task_id(a)
@@ -1069,7 +1204,7 @@ class TestCircularDeps:
 
 class TestRendering:
     async def _make_graph(self) -> tuple[Any, int]:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
 
         async def fn() -> None:
             pass
@@ -1077,7 +1212,7 @@ class TestRendering:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 a = tg.create_task(node(fn)(), name="task-a")
-                tg.create_task(node(fn, deps=[a])(), name="task-b")
+                tg.create_task(node(fn, wait_for=[a])(), name="task-b")
 
         root_task = asyncio.create_task(track(run)(), name="root")
         root_id = await get_task_id(root_task)
@@ -1098,7 +1233,7 @@ class TestRendering:
         assert "task-b" in output
 
     async def test_render_text_no_root(self) -> None:
-        from aiotask import TaskGraph
+        from aiotask import TaskGraph, track
         from aiotask._render import render_text
 
         async def fn() -> None:

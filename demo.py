@@ -62,30 +62,30 @@ async def pipeline() -> None:
             name="fetch",
         )
         valid = tg.create_task(
-            aiotask.node(validate, deps=[fetch])(fetch),
+            aiotask.node(validate)(fetch),
             name="validate",
         )
         enriched = tg.create_task(
-            aiotask.node(enrich, deps=[fetch])(fetch),
+            aiotask.node(enrich)(fetch),
             name="enrich",
         )
         transformed = tg.create_task(
-            aiotask.node(transform, deps=[valid])(valid),
+            aiotask.node(transform)(valid),
             name="transform",
         )
         loaded = tg.create_task(
-            aiotask.node(load, deps=[transformed, enriched])(transformed, enriched),
+            aiotask.node(load)(transformed, enriched),
             name="load",
         )
         # sync function — node wraps it transparently
         tg.create_task(
-            aiotask.node(summarize, deps=[loaded])(loaded),
+            aiotask.node(summarize)(loaded),
             name="summarize",
         )
 
 
 async def run_pipeline() -> tuple[asyncio.Task, aiotask.TaskGraph]:
-    root = asyncio.create_task(aiotask.track(pipeline)(), name="ETL Pipeline")
+    root = asyncio.create_task(aiotask.node(pipeline)(), name="ETL Pipeline")
     root_id = await aiotask.get_task_id(root)
     graph = aiotask.TaskGraph(root_id=root_id)
     return root, graph
