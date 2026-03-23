@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from aiotask._graph import TaskGraph
     from aiotask._render import RenderConfig, get_render, watch
 
-from ._node import node
+from ._node import node, resolve
 
 
 class _Unset:
@@ -444,6 +444,7 @@ __all__ = [
     "make_async_generator",
     "node",
     "remove_task",
+    "resolve",
     "watch",
 ]
 

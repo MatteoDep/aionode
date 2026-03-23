@@ -62,24 +62,24 @@ async def pipeline() -> None:
             name="fetch",
         )
         valid = tg.create_task(
-            aiotask.node(validate)(fetch),
+            aiotask.node(validate)(aiotask.resolve(fetch)),
             name="validate",
         )
         enriched = tg.create_task(
-            aiotask.node(enrich)(fetch),
+            aiotask.node(enrich)(aiotask.resolve(fetch)),
             name="enrich",
         )
         transformed = tg.create_task(
-            aiotask.node(transform)(valid),
+            aiotask.node(transform)(aiotask.resolve(valid)),
             name="transform",
         )
         loaded = tg.create_task(
-            aiotask.node(load)(transformed, enriched),
+            aiotask.node(load)(aiotask.resolve(transformed), aiotask.resolve(enriched)),
             name="load",
         )
-        # sync function — node wraps it transparently
+        # sync function — use make_async first, then node
         tg.create_task(
-            aiotask.node(summarize)(loaded),
+            aiotask.node(aiotask.make_async(summarize))(aiotask.resolve(loaded)),
             name="summarize",
         )
 

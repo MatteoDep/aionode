@@ -31,7 +31,7 @@ async def process(data: list[int]) -> int:
 async def pipeline() -> None:
     async with asyncio.TaskGroup() as tg:
         fetch = tg.create_task(aiotask.node(fetch_data)(), name="fetch")
-        tg.create_task(aiotask.node(process, deps=[fetch])(fetch), name="process")
+        tg.create_task(aiotask.node(process)(aiotask.resolve(fetch)), name="process")
 
 async def main() -> None:
     root = asyncio.create_task(aiotask.track(pipeline)(), name="pipeline")
@@ -46,16 +46,31 @@ asyncio.run(main())
 
 ## Core Concepts
 
-### `node(func, deps=[], track=True, auto_progress=True)`
+### `node(func, wait_for=[], track=True, auto_progress=True)`
 
-Wraps a sync or async function as a DAG node. Awaitable arguments are resolved automatically before calling the function.
+Wraps an async function as a DAG node. Use `resolve()` to pass awaitables as arguments — they are gathered concurrently before the function is called. Sync functions must be wrapped with `make_async` first.
 
 ```python
-# Sync function — wrapped transparently
-result = await aiotask.node(lambda x, y: x + y)(task_a, task_b)
+# Async function — pass upstream tasks with resolve()
+fetch = tg.create_task(aiotask.node(fetch_data)(), name="fetch")
+process_task = tg.create_task(aiotask.node(process)(aiotask.resolve(fetch)), name="process")
 
-# With explicit dependencies
-task_b = tg.create_task(aiotask.node(process, deps=[task_a])(task_a), name="process")
+# Sync function — wrap with make_async first
+summarize = tg.create_task(
+    aiotask.node(aiotask.make_async(my_sync_fn))(aiotask.resolve(process_task)),
+    name="summarize",
+)
+
+# Side-only dependency (no value passed): use wait_for
+task_b = tg.create_task(aiotask.node(cleanup, wait_for=[fetch])(), name="cleanup")
+```
+
+### `resolve(awaitable)`
+
+Marks an awaitable to be resolved before being passed as an argument to `node()`. This preserves type information — the type checker sees `resolve(task: Task[T])` as returning `T`.
+
+```python
+result = await aiotask.node(process)(aiotask.resolve(upstream_task))
 ```
 
 ### `track(func, start=True)`
@@ -115,7 +130,8 @@ await aiotask.log("processing record 42")  # Append to current task's logs
 
 | Function | Description |
 |---|---|
-| `node(func, deps, track, auto_progress)` | Wrap a function as a DAG node |
+| `node(func, wait_for, track, auto_progress)` | Wrap an async function as a DAG node |
+| `resolve(awaitable)` | Mark an awaitable to be resolved as a node argument |
 | `track(func, start)` | Track a coroutine in the task graph |
 | `get_task_id(task, timeout)` | Get the task ID for an asyncio.Task |
 | `get_task(task_id)` | Get TaskInfo by ID |

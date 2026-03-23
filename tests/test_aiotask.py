@@ -16,6 +16,7 @@ from aiotask import (
     make_async_generator,
     node,
     remove_task,
+    resolve,
 )
 
 
@@ -690,7 +691,7 @@ class TestNode:
     async def test_node_plain_args(self) -> None:
         """All plain values passed to a sync function."""
 
-        def add(x: int, y: int) -> int:
+        async def add(x: int, y: int) -> int:
             return x + y
 
         result = await node(add)(1, 2)
@@ -699,7 +700,7 @@ class TestNode:
     async def test_node_awaitable_args(self) -> None:
         """All args are Futures/coroutines — should be resolved before calling."""
 
-        def add(x: int, y: int) -> int:
+        async def add(x: int, y: int) -> int:
             return x + y
 
         loop = asyncio.get_event_loop()
@@ -708,20 +709,20 @@ class TestNode:
         fx.set_result(10)
         fy.set_result(20)
 
-        result = await node(add)(fx, fy)
+        result = await node(add)(resolve(fx), resolve(fy))
         assert result == 30
 
     async def test_node_mixed_args(self) -> None:
         """Mix of plain and awaitable positional args."""
 
-        def multiply(x: int, y: int) -> int:
+        async def multiply(x: int, y: int) -> int:
             return x * y
 
         loop = asyncio.get_event_loop()
         fx: asyncio.Future[int] = loop.create_future()
         fx.set_result(5)
 
-        result = await node(multiply)(fx, 4)
+        result = await node(multiply)(resolve(fx), 4)
         assert result == 20
 
     async def test_node_async_func(self) -> None:
@@ -737,14 +738,14 @@ class TestNode:
     async def test_node_kwargs(self) -> None:
         """Keyword arguments — both plain and awaitable — are resolved."""
 
-        def greet(name: str, greeting: str = "Hello") -> str:
+        async def greet(name: str, greeting: str = "Hello") -> str:
             return f"{greeting}, {name}!"
 
         loop = asyncio.get_event_loop()
         name_fut: asyncio.Future[str] = loop.create_future()
         name_fut.set_result("world")
 
-        result = await node(greet)(name=name_fut, greeting="Hi")  # type: ignore[missing-argument, unknown-argument]
+        result = await node(greet)(name=resolve(name_fut), greeting="Hi")
         assert result == "Hi, world!"
 
     async def test_node_awaitable_args_gathered_concurrently(self) -> None:
@@ -756,12 +757,12 @@ class TestNode:
             order.append(n)
             return n
 
-        def add(x: int, y: int) -> int:
+        async def add(x: int, y: int) -> int:
             return x + y
 
         t1 = asyncio.create_task(slow(1))
         t2 = asyncio.create_task(slow(2))
-        result = await node(add)(t1, t2)
+        result = await node(add)(resolve(t1), resolve(t2))
         assert result == 3
 
     async def test_node_task_arg_without_wait_for(self) -> None:
@@ -770,13 +771,13 @@ class TestNode:
         async def upstream() -> int:
             return 10
 
-        def downstream(x: int) -> int:
+        async def downstream(x: int) -> int:
             return x + 1
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 up = tg.create_task(node(upstream)(), name="up")
-                tg.create_task(node(downstream)(up), name="down")
+                tg.create_task(node(downstream)(resolve(up)), name="down")
 
         from aiotask import track
 
@@ -805,7 +806,7 @@ class TestDepEdges:
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 up = tg.create_task(node(upstream_fn)(), name="upstream")
-                down = tg.create_task(node(downstream_fn)(up), name="downstream")
+                down = tg.create_task(node(downstream_fn)(resolve(up)), name="downstream")
 
                 async def capture() -> None:
                     up_id = await get_task_id(up)
@@ -1078,7 +1079,7 @@ class TestNodeOptions:
     async def test_node_preserves_function_name(self) -> None:
         """node() wrapper should preserve __name__ via functools.wraps."""
 
-        def my_named_func() -> int:
+        async def my_named_func() -> int:
             return 1
 
         wrapped = node(my_named_func)
@@ -1150,13 +1151,13 @@ class TestErrorPropagation:
         async def failing_fn() -> int:
             raise ValueError("upstream boom")
 
-        def downstream_fn(x: int) -> int:
+        async def downstream_fn(x: int) -> int:
             return x + 1
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
                 up = tg.create_task(node(failing_fn)(), name="failing")
-                tg.create_task(node(downstream_fn)(up), name="downstream")
+                tg.create_task(node(downstream_fn)(resolve(up)), name="downstream")
 
         with pytest.raises(ExceptionGroup):
             await asyncio.create_task(node(run)())
