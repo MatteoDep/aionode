@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from aiotask._graph import TaskGraph
     from aiotask._render import RenderConfig, get_render, watch
 
-from ._awaitify import node
+from ._node import node
 
 
 class _Unset:

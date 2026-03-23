@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate src/aiotask/_awaitify.pyi with typed overloads for node."""
+"""Generate src/aiotask/_node.pyi with typed overloads for node."""
 
 from pathlib import Path
 
 MAX_PARAMS = 10
-OUTPUT = Path(__file__).parent.parent / "src" / "aiotask" / "_awaitify.pyi"
+OUTPUT = Path(__file__).parent.parent / "src" / "aiotask" / "_node.pyi"
 
 
 def make_type_vars(n: int) -> str:
