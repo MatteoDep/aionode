@@ -43,6 +43,20 @@ def node[**P, R](
             + list(wait_for or [])
         )
 
+        if track:
+            from aiotask import _get_state, _register_dep, _task_id
+
+            state = _get_state()
+            our_id = _task_id.get()
+            dep_tasks: list[asyncio.Task] = (
+                [a.awaitable for _, a in resolved_arg_idxs if isinstance(a.awaitable, asyncio.Task)]
+                + [v.awaitable for _, v in resolved_kwarg_keys if isinstance(v.awaitable, asyncio.Task)]
+                + [d for d in (wait_for or []) if isinstance(d, asyncio.Task)]
+            )
+            for dep_task in dep_tasks:
+                if dep_task in state.task_ids:
+                    await _register_dep(our_id, state.task_ids[dep_task])
+
         try:
             if all_awaitables:
                 results = await asyncio.gather(*all_awaitables)
@@ -64,20 +78,6 @@ def node[**P, R](
         resolved_kwargs = dict(kwargs)
         for (k, _), val in zip(resolved_kwarg_keys, kwarg_results, strict=True):
             resolved_kwargs[k] = val
-
-        if track:
-            from aiotask import _get_state, _register_dep, _task_id
-
-            state = _get_state()
-            our_id = _task_id.get()
-            dep_tasks: list[asyncio.Task] = (
-                [a.awaitable for _, a in resolved_arg_idxs if isinstance(a.awaitable, asyncio.Task)]
-                + [v.awaitable for _, v in resolved_kwarg_keys if isinstance(v.awaitable, asyncio.Task)]
-                + [d for d in (wait_for or []) if isinstance(d, asyncio.Task)]
-            )
-            for dep_task in dep_tasks:
-                if dep_task in state.task_ids:
-                    await _register_dep(our_id, state.task_ids[dep_task])
 
         await _start()
 

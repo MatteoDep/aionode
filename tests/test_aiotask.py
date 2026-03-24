@@ -9,8 +9,8 @@ import pytest
 
 from aiotask import (
     TaskStatus,
-    get_task_info,
     get_task_id,
+    get_task_info,
     log,
     make_async,
     make_async_generator,
@@ -408,6 +408,7 @@ class TestParentChild:
     async def test_subtask_inherits_parent_depth(self) -> None:
         """Subtasks created inside a node body inherit the parent's depth."""
         child_ids: list[int] = []
+        upstream_ids: list[int] = []
 
         async def child_fn() -> None:
             child_ids.append(_task_id.get())
@@ -417,6 +418,7 @@ class TestParentChild:
                 tg.create_task(node(child_fn)(), name="child")
 
         async def upstream_fn() -> int:
+            upstream_ids.append(_task_id.get())
             return 1
 
         async def run() -> None:
@@ -430,6 +432,8 @@ class TestParentChild:
 
         child_info = get_task_info(child_ids[0])
         assert child_info.depth == 1  # inherited from parent (which depends on upstream)
+        # child should also inherit parent's dep edge on upstream
+        assert child_info.deps == [upstream_ids[0]]
 
 
 # ---------------------------------------------------------------------------

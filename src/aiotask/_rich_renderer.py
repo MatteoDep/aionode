@@ -23,13 +23,7 @@ def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskI
         if real:
             return real
         if info.parent is not None and info.parent != root_id and info.parent in node_map:
-            parent_info = node_map[info.parent]
-            if info.depth > parent_info.depth:
-                return [info.parent]
-            # Subtask inherited parent's depth — anchor at the same level as parent
-            parent_deps = [d for d in parent_info.deps if d != root_id and d in node_map]
-            if parent_deps:
-                return parent_deps
+            return [info.parent]
         return []
 
     tree_kids: dict[int, list[int]] = {}

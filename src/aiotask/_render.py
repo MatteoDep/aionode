@@ -196,7 +196,7 @@ def _render_dag_asciidag(graph: TaskGraph, config: RenderConfig, use_color: bool
     lines = output.rstrip("\n").split("\n") if output.strip() else []
     if root_id is not None and root_id in node_map:
         root_label = _fmt_dag_label(node_map[root_id], use_color, config)
-        lines = [root_label] + lines
+        lines = [root_label, *lines]
     return lines
 
 
@@ -216,13 +216,7 @@ def _render_dag_fallback(graph: TaskGraph, config: RenderConfig, use_color: bool
         if real:
             return real
         if info.parent is not None and info.parent != root_id and info.parent in node_map:
-            parent_info = node_map[info.parent]
-            if info.depth > parent_info.depth:
-                return [info.parent]
-            # Subtask inherited parent's depth — anchor at the same level as parent
-            parent_deps = [d for d in parent_info.deps if d != root_id and d in node_map]
-            if parent_deps:
-                return parent_deps
+            return [info.parent]
         return []
 
     tree_kids: dict[int, list[int]] = {}

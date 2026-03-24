@@ -275,6 +275,11 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         state.task_ids[task] = task_id
         _task_id.set(task_id)
 
+    # Inherit parent's dep edges so subtasks appear at correct DAG depth
+    if parent_id is not None:
+        for dep_id in state.task_infos[parent_id].deps:
+            await _register_dep(task_id, dep_id)
+
 
 async def _start_task() -> None:
     state = _get_state()
