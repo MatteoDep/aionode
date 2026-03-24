@@ -237,6 +237,8 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
     except LookupError:
         parent_id = None
 
+    parent_depth = state.task_infos[parent_id].depth if parent_id is not None else 0
+
     task_info = TaskInfo(
         id=task_id,
         name=task_name,
@@ -248,6 +250,7 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         task=task,
         running_subtasks=[],
         auto_progress=auto_progress,
+        depth=parent_depth,
     )
 
     async with task_info.allow_edit():

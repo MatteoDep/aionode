@@ -405,6 +405,32 @@ class TestParentChild:
 
         await asyncio.create_task(node(parent_coro)())
 
+    async def test_subtask_inherits_parent_depth(self) -> None:
+        """Subtasks created inside a node body inherit the parent's depth."""
+        child_ids: list[int] = []
+
+        async def child_fn() -> None:
+            child_ids.append(_task_id.get())
+
+        async def parent_fn(x: int) -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(child_fn)(), name="child")
+
+        async def upstream_fn() -> int:
+            return 1
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                up = tg.create_task(node(upstream_fn)(), name="upstream")
+                tg.create_task(node(parent_fn)(resolve(up)), name="parent")
+
+        from aiotask import _task_id, track
+        await asyncio.create_task(track(run)())
+        await _flush()
+
+        child_info = get_task_info(child_ids[0])
+        assert child_info.depth == 1  # inherited from parent (which depends on upstream)
+
 
 # ---------------------------------------------------------------------------
 # log

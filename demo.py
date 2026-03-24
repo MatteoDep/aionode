@@ -153,7 +153,7 @@ async def main() -> None:
 
     # Live DAG view
     print("\n── DAG view ────────────────────────────")
-    dag_render = aiotask.get_render(rich=False, view="dag")
+    dag_render = aiotask.get_render(view="dag")
     root, graph = await run_pipeline()
     await aiotask.watch(graph, interval=0.3, renderer=dag_render)
     await root

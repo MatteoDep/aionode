@@ -19,9 +19,19 @@ def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskI
         info = node_map.get(nid)
         if info is None:
             return []
-        return [d for d in info.deps if d != root_id and d in node_map]
+        real = [d for d in info.deps if d != root_id and d in node_map]
+        if real:
+            return real
+        if info.parent is not None and info.parent != root_id and info.parent in node_map:
+            parent_info = node_map[info.parent]
+            if info.depth > parent_info.depth:
+                return [info.parent]
+            # Subtask inherited parent's depth — anchor at the same level as parent
+            parent_deps = [d for d in parent_info.deps if d != root_id and d in node_map]
+            if parent_deps:
+                return parent_deps
+        return []
 
-    primary: dict[int, int] = {}
     tree_kids: dict[int, list[int]] = {}
     dag_roots: list[int] = []
 
@@ -33,7 +43,6 @@ def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskI
             dag_roots.append(n.id)
         else:
             best = max(deps, key=lambda d: (node_map[d].depth, -d))
-            primary[n.id] = best
             tree_kids.setdefault(best, []).append(n.id)
 
     for pid in tree_kids:
@@ -43,24 +52,19 @@ def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskI
         dag_roots = sorted(n.id for n in nodes if n.id != root_id)
 
     result: list[tuple[str, TaskInfo, str]] = []
+    if root_id is not None and root_id in node_map:
+        result.append(("", node_map[root_id], ""))
 
-    def walk(nid: int, prefix: str, connector: str) -> None:
+    def walk(nid: int, indent: str) -> None:
         info = node_map[nid]
-        deps = eff_deps(nid)
-        non_primary = [d for d in deps if d != primary.get(nid)]
-        names = [node_map[d].name for d in non_primary]
-        extra = f"  ← {', '.join(names)}" if names else ""
-        result.append((connector, info, extra))
-        kids = tree_kids.get(nid, [])
-        for i, kid in enumerate(kids):
-            is_last = i == len(kids) - 1
-            if is_last:
-                walk(kid, prefix + "     ", prefix + "└──► ")
-            else:
-                walk(kid, prefix + "│    ", prefix + "├──► ")
+        real_deps = [d for d in info.deps if d != root_id and d in node_map]
+        annotation = f"  [dim](← {', '.join(node_map[d].name for d in real_deps)})[/dim]" if real_deps else ""
+        result.append((indent, info, annotation))
+        for kid in tree_kids.get(nid, []):
+            walk(kid, indent + "  ")
 
     for root_nid in dag_roots:
-        walk(root_nid, "", "")
+        walk(root_nid, "")
 
     return result
 
@@ -83,12 +87,8 @@ def _render_rich_dag(graph: TaskGraph, config: RenderConfig) -> str:
 
     from aiotask._render import _render_dag_asciidag
 
-    lines = _render_dag_asciidag(graph, config, use_color=False)
-    text = Text()
-    for i, line in enumerate(lines):
-        if i > 0:
-            text.append("\n")
-        text.append(line)
+    lines = _render_dag_asciidag(graph, config, use_color=True)
+    text = Text.from_ansi("\n".join(lines))
 
     buf = io.StringIO()
     console = Console(file=buf, highlight=False, markup=False, force_terminal=True)
@@ -126,12 +126,21 @@ def _render_rich_table(graph: TaskGraph, config: RenderConfig) -> str:
     if config.view == "dag":
         ordered = _dag_order(graph, nodes)
     elif graph.root_id is not None:
-        root_list = [n for n in nodes if n.id == graph.root_id]
-        subtasks = [n for n in nodes if n.id != graph.root_id]
-        ordered = [("", root_list[0], "")] if root_list else []
-        for i, n in enumerate(subtasks):
-            prefix = "└─ " if i == len(subtasks) - 1 else "├─ "
-            ordered.append((prefix, n, ""))
+        node_map = {n.id: n for n in nodes}
+        ordered = []
+
+        def _walk(nid: int, indent: str, connector: str) -> None:
+            info = node_map.get(nid)
+            if info is None:
+                return
+            ordered.append((connector, info, ""))
+            children = [c for c in info.subtasks if c in node_map]
+            for i, cid in enumerate(children):
+                is_last = i == len(children) - 1
+                _walk(cid, indent + ("   " if is_last else "│  "), indent + ("└─ " if is_last else "├─ "))
+
+        if graph.root_id in node_map:
+            _walk(graph.root_id, "", "")
     else:
         ordered = [("", n, "") for n in nodes]
 
