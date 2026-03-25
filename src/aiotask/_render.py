@@ -156,6 +156,7 @@ def _render_dag_asciidag(graph: TaskGraph, config: RenderConfig, use_color: bool
         return []
 
     node_map: dict[int, TaskInfo] = {n.id: n for n in nodes}
+    topo_idx = {n.id: i for i, n in enumerate(nodes)}
     root_id = graph.root_id
 
     # Build asciidag Node objects. "parents" in asciidag = dependents in our DAG
@@ -183,8 +184,8 @@ def _render_dag_asciidag(graph: TaskGraph, config: RenderConfig, use_color: bool
             if c in ascii_nodes and c not in info.dependents and c not in info.deps
         ]
         dependents_in_graph = subtask_kids + dependents_in_graph
-        # Sort dependents by depth (shallowest first) for consistent column layout
-        dependents_in_graph.sort(key=lambda d: (node_map[d].depth, d))
+        # Sort dependents by topological index for consistent column layout
+        dependents_in_graph.sort(key=lambda d: (topo_idx.get(d, 0), d))
         ascii_nodes[info.id].parents = [ascii_nodes[d] for d in dependents_in_graph]
 
     # Display order: topological (depth ASC), which is the order from graph.nodes()
@@ -207,6 +208,7 @@ def _render_dag_fallback(graph: TaskGraph, config: RenderConfig, use_color: bool
     if not nodes:
         return []
     node_map = {n.id: n for n in nodes}
+    topo_idx = {n.id: i for i, n in enumerate(nodes)}
     root_id = graph.root_id
 
     def eff_deps(nid: int) -> list[int]:
@@ -229,10 +231,10 @@ def _render_dag_fallback(graph: TaskGraph, config: RenderConfig, use_color: bool
         if not deps:
             dag_roots.append(n.id)
         else:
-            best = max(deps, key=lambda d: (node_map[d].depth, -d))
+            best = max(deps, key=lambda d: (topo_idx.get(d, 0), -d))
             tree_kids.setdefault(best, []).append(n.id)
     for pid in tree_kids:
-        tree_kids[pid].sort(key=lambda c: (node_map[c].depth, c))
+        tree_kids[pid].sort(key=lambda c: (topo_idx.get(c, 0), c))
     if not dag_roots:
         dag_roots = sorted(n.id for n in nodes if n.id != root_id)
 

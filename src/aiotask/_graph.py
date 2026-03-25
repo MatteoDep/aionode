@@ -44,11 +44,37 @@ class TaskGraph:
         return result
 
     def nodes(self) -> list[TaskInfo]:
-        """Return all nodes in topological order (depth ASC, then id ASC)."""
+        """Return all nodes in topological order (Kahn's algorithm, ties broken by id ASC)."""
         state = self._state()
         ids = self._all_ids()
-        infos = [state.task_infos[tid] for tid in ids if tid in state.task_infos]
-        return sorted(infos, key=lambda x: (x.depth, x.id))
+        infos = {tid: state.task_infos[tid] for tid in ids if tid in state.task_infos}
+        if not infos:
+            return []
+
+        in_degree: dict[int, int] = dict.fromkeys(infos, 0)
+        successors: dict[int, list[int]] = {tid: [] for tid in infos}
+
+        for tid, info in infos.items():
+            # Tree edge: parent → child
+            if info.parent is not None and info.parent in infos:
+                in_degree[tid] += 1
+                successors[info.parent].append(tid)
+            # Dep edges: dep → dependent (dep must come first)
+            for dep_id in info.deps:
+                if dep_id in infos and dep_id != info.parent:
+                    in_degree[tid] += 1
+                    successors[dep_id].append(tid)
+
+        queue = sorted(tid for tid, d in in_degree.items() if d == 0)
+        result: list[TaskInfo] = []
+        while queue:
+            tid = queue.pop(0)
+            result.append(infos[tid])
+            newly_free = sorted(s for s in successors[tid] if in_degree[s] - 1 == 0)
+            for s in successors[tid]:
+                in_degree[s] -= 1
+            queue = sorted(set(queue) | set(newly_free))
+        return result
 
     def node(self, task_id: int) -> TaskInfo:
         from aiotask import get_task_info

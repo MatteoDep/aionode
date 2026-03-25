@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskInfo, str]]:
     """Walk DAG in tree order (each node once). Returns (prefix, info, dep_annotation)."""
     node_map: dict[int, TaskInfo] = {n.id: n for n in nodes}
+    topo_idx = {n.id: i for i, n in enumerate(nodes)}
     root_id = graph.root_id
 
     def eff_deps(nid: int) -> list[int]:
@@ -36,11 +37,11 @@ def _dag_order(graph: TaskGraph, nodes: list[TaskInfo]) -> list[tuple[str, TaskI
         if not deps:
             dag_roots.append(n.id)
         else:
-            best = max(deps, key=lambda d: (node_map[d].depth, -d))
+            best = max(deps, key=lambda d: (topo_idx.get(d, 0), -d))
             tree_kids.setdefault(best, []).append(n.id)
 
     for pid in tree_kids:
-        tree_kids[pid].sort(key=lambda c: (node_map[c].depth, c))
+        tree_kids[pid].sort(key=lambda c: (topo_idx.get(c, 0), c))
 
     if not dag_roots:
         dag_roots = sorted(n.id for n in nodes if n.id != root_id)

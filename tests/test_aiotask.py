@@ -431,7 +431,8 @@ class TestParentChild:
         await _flush()
 
         child_info = get_task_info(child_ids[0])
-        assert child_info.depth == 3  # parent is at depth 2 (run+1, dep on upstream), child is parent+1
+        assert child_info.tree_depth == 2  # child is a subtask of parent (tree depth 1), so tree_depth=2
+        assert child_info.dag_depth == 0   # child has no dep edges
         assert child_info.deps == []
 
 
@@ -836,8 +837,8 @@ class TestDepEdges:
 
         assert down_id in up_info.dependents
         assert up_id in down_info.deps
-        assert down_info.depth == 2
-        assert up_info.depth == 1
+        assert up_info.dag_depth == 0
+        assert down_info.dag_depth == 1
 
     async def test_deps_populated_via_wait_for(self) -> None:
         """node(fn, wait_for=[upstream]) populates deps/dependents/depth."""
@@ -877,8 +878,8 @@ class TestDepEdges:
 
         assert down_id in up_info.dependents
         assert up_id in down_info.deps
-        assert down_info.depth == 2
-        assert up_info.depth == 1
+        assert up_info.dag_depth == 0
+        assert down_info.dag_depth == 1
 
     async def test_depth_accumulates_transitively(self) -> None:
         """A -> B -> C should give C depth=2."""
@@ -912,9 +913,9 @@ class TestDepEdges:
         b_info = get_task_info(b_ids[0])
         c_info = get_task_info(c_ids[0])
 
-        assert a_info.depth == 1
-        assert b_info.depth == 2
-        assert c_info.depth == 3
+        assert a_info.dag_depth == 0
+        assert b_info.dag_depth == 1
+        assert c_info.dag_depth == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1131,13 +1132,13 @@ class TestDiamondDeps:
         c_info = get_task_info(ids["c"])
         d_info = get_task_info(ids["d"])
 
-        # a is first-level subtask of run
-        assert a_info.depth == 1
+        # a has no dep edges
+        assert a_info.dag_depth == 0
         # b and c depend on a
-        assert b_info.depth == 2
-        assert c_info.depth == 2
-        # d depends on b and c (depth = max(2,2) + 1 = 3)
-        assert d_info.depth == 3
+        assert b_info.dag_depth == 1
+        assert c_info.dag_depth == 1
+        # d depends on b and c (dag_depth = max(1,1) + 1 = 2)
+        assert d_info.dag_depth == 2
         # d has both b and c as deps
         assert ids["b"] in d_info.deps
         assert ids["c"] in d_info.deps

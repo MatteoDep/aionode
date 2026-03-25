@@ -132,7 +132,8 @@ class TaskInfo:
     auto_progress: bool = True
     deps: list[int] = field(default_factory=list)
     dependents: list[int] = field(default_factory=list)
-    depth: int = 0
+    tree_depth: int = 0
+    dag_depth: int = 0
     _start_mono: float | None = field(default=None, repr=False, compare=False)
     _finish_mono: float | None = field(default=None, repr=False, compare=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
@@ -312,7 +313,7 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
     except LookupError:
         parent_id = None
 
-    parent_depth = (state.task_infos[parent_id].depth + 1) if parent_id is not None else 0
+    parent_tree_depth = state.task_infos[parent_id].tree_depth if parent_id is not None else -1
 
     task_info = TaskInfo(
         id=task_id,
@@ -325,7 +326,8 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         task=task,
         running_subtasks=[],
         auto_progress=auto_progress,
-        depth=parent_depth,
+        tree_depth=parent_tree_depth + 1,
+        dag_depth=0,
     )
 
     async with task_info.allow_edit():
@@ -405,9 +407,9 @@ async def _register_dep(from_id: int, to_id: int) -> None:
     async with from_info.allow_edit():
         if to_id not in from_info.deps:
             from_info.deps.append(to_id)
-        new_depth = to_info.depth + 1
-        if new_depth > from_info.depth:
-            from_info.depth = new_depth
+        new_dag_depth = to_info.dag_depth + 1
+        if new_dag_depth > from_info.dag_depth:
+            from_info.dag_depth = new_dag_depth
     async with to_info.allow_edit():
         if from_id not in to_info.dependents:
             to_info.dependents.append(from_id)
