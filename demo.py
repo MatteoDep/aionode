@@ -1,5 +1,5 @@
 """
-aiotask demo — dependency graph with live progress rendering.
+aiotask demo — dependency graph with walk_tree / walk_dag traversal.
 
 Features showcased:
   - resolve()         pass an asyncio.Task as a coroutine argument
@@ -7,6 +7,8 @@ Features showcased:
   - TaskInfo.update() report per-chunk progress from inside a coroutine
   - make_async()      wrap a sync function so it can be tracked
   - subtasks          enrich() fans out into per-chunk node() subtasks
+  - walk_tree()       DFS pre-order traversal (tree view)
+  - walk_dag()        topological order traversal (DAG view)
 
 DAG shape:
 
@@ -27,6 +29,7 @@ import asyncio
 import aiotask
 
 # ── step functions ────────────────────────────────────────────────────────────
+
 
 async def fetch_data() -> list[int]:
     await asyncio.sleep(1)
@@ -101,6 +104,7 @@ def summarize(count: int) -> str:
 
 # ── pipeline ──────────────────────────────────────────────────────────────────
 
+
 async def pipeline() -> None:
     async with asyncio.TaskGroup() as tg:
         fetch = tg.create_task(
@@ -135,42 +139,71 @@ async def pipeline() -> None:
         )
 
 
-async def run_pipeline() -> tuple[asyncio.Task, aiotask.TaskGraph]:
-    root = asyncio.create_task(aiotask.node(pipeline)(), name="ETL Pipeline")
-    root_id = await aiotask.get_task_id(root)
-    graph = aiotask.TaskGraph(root_id=root_id)
-    return root, graph
+# ── rendering helpers ─────────────────────────────────────────────────────────
+
+
+def _status_icon(info: aiotask.TaskInfo) -> str:
+    match info.status:
+        case aiotask.TaskStatus.DONE:
+            return "+"
+        case aiotask.TaskStatus.FAILED:
+            return "x"
+        case aiotask.TaskStatus.RUNNING:
+            return "~"
+        case aiotask.TaskStatus.CANCELLED:
+            return "!"
+        case _:
+            return "."
+
+
+def _progress(info: aiotask.TaskInfo) -> str:
+    if info.total is not None:
+        return f" [{info.completed:.0f}/{info.total:.0f}]"
+    return ""
+
+
+def print_tree(root_id: int) -> None:
+    for info in aiotask.walk_tree(root_id):
+        indent = "  " * info.tree_depth
+        icon = _status_icon(info)
+        print(f"{indent}[{icon}] {info.name}{_progress(info)}  ({info.duration():.2f}s)")
+
+
+def print_dag(root_id: int) -> None:
+    for info in aiotask.walk_dag(root_id):
+        isolated = " (isolated)" if not info.deps and not info.dependents else ""
+        dep_names = ", ".join(
+            aiotask.get_task_info(d).name for d in info.deps
+        )
+        deps_str = f"  <- {dep_names}" if dep_names else ""
+        icon = _status_icon(info)
+        print(f"  [{icon}] {info.name}{_progress(info)}{deps_str}{isolated}")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+
 async def main() -> None:
-    # Live tree view (default)
+    root = asyncio.create_task(aiotask.node(pipeline)(), name="ETL Pipeline")
+    root_id = await aiotask.get_task_id(root)
+    await root
+
+    # Let done-callbacks finish
+    for _ in range(5):
+        await asyncio.sleep(0)
+
     print("\n── Tree view ───────────────────────────")
-    root, graph = await run_pipeline()
-    await aiotask.watch(graph, interval=0.3)
-    await root
+    print_tree(root_id)
 
-    # Live DAG view
     print("\n── DAG view ────────────────────────────")
-    dag_render = aiotask.get_render(view="dag")
-    root, graph = await run_pipeline()
-    await aiotask.watch(graph, interval=0.3, renderer=dag_render)
-    await root
+    print_dag(root_id)
 
-    # Post-run graph inspection
-    print("\n── Summary ─────────────────────────────")
-    for status, count in graph.summary().items():
-        print(f"  {status.value}: {count}")
-
-    print("\n── Critical path ───────────────────────")
-    for info in graph.critical_path():
-        print(f"  {info.name}  ({info.duration():.2f}s)")
-
-    print("\n── Upstream of 'load' ──────────────────")
-    load_id = next(n.id for n in graph.nodes() if n.name == "load")
-    for info in graph.upstream(load_id):
-        print(f"  {info.name}")
+    # Show isolated nodes (enrich chunks have no DAG deps/dependents)
+    print("\n── Isolated nodes ──────────────────────")
+    for info in aiotask.walk_dag(root_id):
+        if not info.deps and not info.dependents:
+            parent_name = aiotask.get_task_info(info.parent).name if info.parent is not None else "none"
+            print(f"  {info.name} (parent: {parent_name})")
 
 
 asyncio.run(main())

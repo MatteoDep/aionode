@@ -6,17 +6,14 @@ import inspect
 import threading
 import time
 import weakref
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Iterator, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
-if TYPE_CHECKING:
-    from aiotask._graph import TaskGraph
-    from aiotask._render import RenderConfig, get_render, watch
 
 @dataclass(slots=True)
 class _Resolved[T]:
@@ -522,33 +519,103 @@ async def make_async_generator[T](gen: SupportsNext[T]) -> AsyncGenerator[T]:
         yield cast("T", obj)
 
 
+def walk_tree(root: asyncio.Task | int | None = None) -> Iterator[TaskInfo]:
+    """DFS pre-order through call tree (parent -> subtasks).
+
+    If *root* is an ``asyncio.Task``, its tracked id is looked up.
+    If *root* is ``None``, the root task (parent=None) is used.
+    """
+    state = _get_state()
+    if root is None:
+        root_id = next((tid for tid, info in state.task_infos.items() if info.parent is None), None)
+        if root_id is None:
+            return
+    elif isinstance(root, int):
+        root_id = root
+    else:
+        root_id = state.task_ids.get(root)
+        if root_id is None:
+            return
+
+    stack = [root_id]
+    while stack:
+        tid = stack.pop()
+        info = state.task_infos.get(tid)
+        if info is None:
+            continue
+        yield info
+        # Push children in reverse so leftmost child is visited first
+        stack.extend(reversed(info.subtasks))
+
+
+def walk_dag(root: asyncio.Task | int | None = None) -> Iterator[TaskInfo]:
+    """Topological order (Kahn's algorithm) over tasks.
+
+    Uses both tree edges (parent->child) and DAG edges (dep->dependent).
+    If *root* is ``None``, includes all tasks in the event loop.
+    """
+    state = _get_state()
+
+    # Collect the set of task IDs to include
+    if root is None:
+        ids = list(state.task_infos.keys())
+    else:
+        if isinstance(root, int):
+            start_id = root
+        else:
+            start_id = state.task_ids.get(root)
+            if start_id is None:
+                return
+        ids = []
+        visited: set[int] = set()
+        bfs = [start_id]
+        while bfs:
+            tid = bfs.pop()
+            if tid in visited or tid not in state.task_infos:
+                continue
+            visited.add(tid)
+            ids.append(tid)
+            bfs.extend(state.task_infos[tid].subtasks)
+
+    infos = {tid: state.task_infos[tid] for tid in ids if tid in state.task_infos}
+    if not infos:
+        return
+
+    # Kahn's algorithm — edges: parent->child and dep->dependent
+    in_degree: dict[int, int] = dict.fromkeys(infos, 0)
+    successors: dict[int, list[int]] = {tid: [] for tid in infos}
+
+    for tid, info in infos.items():
+        if info.parent is not None and info.parent in infos:
+            in_degree[tid] += 1
+            successors[info.parent].append(tid)
+        for dep_id in info.deps:
+            if dep_id in infos and dep_id != info.parent:
+                in_degree[tid] += 1
+                successors[dep_id].append(tid)
+
+    queue = sorted(tid for tid, d in in_degree.items() if d == 0)
+    while queue:
+        tid = queue.pop(0)
+        yield infos[tid]
+        newly_free = sorted(s for s in successors[tid] if in_degree[s] - 1 == 0)
+        for s in successors[tid]:
+            in_degree[s] -= 1
+        queue = sorted(set(queue) | set(newly_free))
+
+
 __all__ = [
-    "RenderConfig",
-    "TaskGraph",
     "TaskInfo",
     "TaskStatus",
     "current_task_info",
-    "get_render",
-    "get_task",
     "get_task_id",
+    "get_task_info",
     "log",
     "make_async",
     "make_async_generator",
     "node",
     "remove_task",
     "resolve",
-    "watch",
+    "walk_dag",
+    "walk_tree",
 ]
-
-
-def __getattr__(name: str) -> object:
-    if name == "TaskGraph":
-        from aiotask._graph import TaskGraph as _TaskGraph
-
-        return _TaskGraph
-    if name in ("get_render", "RenderConfig", "watch"):
-        import aiotask._render as _render
-
-        return getattr(_render, name)
-    msg = f"module 'aiotask' has no attribute {name!r}"
-    raise AttributeError(msg)

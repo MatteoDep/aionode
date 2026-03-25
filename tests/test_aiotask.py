@@ -1,9 +1,7 @@
 """Unit tests for aiotask - asyncio task tracking library."""
 
 import asyncio
-import io
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +15,8 @@ from aiotask import (
     node,
     remove_task,
     resolve,
+    walk_dag,
+    walk_tree,
 )
 
 
@@ -919,133 +919,6 @@ class TestDepEdges:
 
 
 # ---------------------------------------------------------------------------
-# TaskGraph
-# ---------------------------------------------------------------------------
-
-
-class TestTaskGraph:
-    async def test_graph_nodes_includes_all_children(self) -> None:
-        from aiotask import TaskGraph, track
-
-        async def child_fn() -> None:
-            await asyncio.sleep(0)
-
-        async def run() -> None:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(child_fn)(), name="c1")
-                tg.create_task(node(child_fn)(), name="c2")
-
-                async def capture() -> None:
-                    pass
-
-                tg.create_task(capture(), name="capture")
-
-        root_task = asyncio.create_task(track(run)(), name="root")
-        root_id = await get_task_id(root_task)
-        await root_task
-        await _flush()
-
-        graph = TaskGraph(root_id=root_id)
-        node_names = {n.name for n in graph.nodes()}
-        assert "root" in node_names
-        assert "c1" in node_names
-        assert "c2" in node_names
-
-    async def test_graph_roots_and_leaves(self) -> None:
-        from aiotask import TaskGraph, track
-
-        async def fn() -> None:
-            await asyncio.sleep(0)
-
-        async def run() -> None:
-            async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
-                tg.create_task(node(fn, wait_for=[b])(), name="c")
-
-        root_task = asyncio.create_task(track(run)(), name="root")
-        root_id = await get_task_id(root_task)
-        await root_task
-        await _flush()
-
-        graph = TaskGraph(root_id=root_id)
-        root_names = {n.name for n in graph.roots()}
-        leaf_names = {n.name for n in graph.leaves()}
-
-        assert "a" in root_names
-        assert "c" in leaf_names
-
-    async def test_graph_summary(self) -> None:
-        from aiotask import TaskGraph, track
-
-        async def fn() -> None:
-            pass
-
-        async def run() -> None:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="c1")
-                tg.create_task(node(fn)(), name="c2")
-
-        root_task = asyncio.create_task(track(run)(), name="root")
-        root_id = await get_task_id(root_task)
-        await root_task
-        await _flush()
-
-        graph = TaskGraph(root_id=root_id)
-        summary = graph.summary()
-        assert summary.get(TaskStatus.DONE, 0) >= 1
-
-    async def test_graph_critical_path_returns_list(self) -> None:
-        from aiotask import TaskGraph, track
-
-        async def fn() -> None:
-            await asyncio.sleep(0.01)
-
-        async def run() -> None:
-            async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                tg.create_task(node(fn, wait_for=[a])(), name="b")
-
-        root_task = asyncio.create_task(track(run)(), name="root")
-        root_id = await get_task_id(root_task)
-        await root_task
-        await _flush()
-
-        graph = TaskGraph(root_id=root_id)
-        path = graph.critical_path()
-        assert isinstance(path, list)
-        assert len(path) >= 1
-
-    async def test_graph_from_task(self) -> None:
-        from aiotask import TaskGraph, track
-
-        async def fn() -> None:
-            pass
-
-        async def run() -> None:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="c1")
-
-        root_task = asyncio.create_task(track(run)(), name="root")
-        root_id = await get_task_id(root_task)
-        await root_task
-        await _flush()
-
-        graph = TaskGraph.from_task(root_task)
-        assert graph.root_id == root_id
-        assert any(n.name == "c1" for n in graph.nodes())
-
-    async def test_graph_repr(self) -> None:
-        from aiotask import TaskGraph
-
-        graph = TaskGraph(root_id=42)
-        assert repr(graph) == "TaskGraph(root_id=42)"
-
-        graph_none = TaskGraph()
-        assert repr(graph_none) == "TaskGraph(root_id=None)"
-
-
-# ---------------------------------------------------------------------------
 # node — track=False, auto_progress=False
 # ---------------------------------------------------------------------------
 
@@ -1207,106 +1080,187 @@ class TestCircularDeps:
 
 
 # ---------------------------------------------------------------------------
-# Rendering
+# walk_tree / walk_dag
 # ---------------------------------------------------------------------------
 
 
-class TestRendering:
-    async def _make_graph(self) -> tuple[Any, int]:
-        from aiotask import TaskGraph, track
+class TestWalkTree:
+    async def test_walk_tree_dfs_order(self) -> None:
+        """Parent appears before its children in DFS pre-order."""
+        from aiotask import track
 
-        async def fn() -> None:
-            pass
+        async def child_fn() -> None:
+            await asyncio.sleep(0)
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="task-a")
-                tg.create_task(node(fn, wait_for=[a])(), name="task-b")
+                tg.create_task(node(child_fn)(), name="c1")
+                tg.create_task(node(child_fn)(), name="c2")
 
         root_task = asyncio.create_task(track(run)(), name="root")
         root_id = await get_task_id(root_task)
         await root_task
         await _flush()
 
-        graph = TaskGraph(root_id=root_id)
-        return graph, root_id
+        names = [info.name for info in walk_tree(root_id)]
+        assert names[0] == "root"
+        assert "c1" in names
+        assert "c2" in names
+        assert names.index("root") < names.index("c1")
+        assert names.index("root") < names.index("c2")
 
-    async def test_render_text_returns_string(self) -> None:
-        from aiotask._render import render_text
+    async def test_walk_tree_respects_subtasks(self) -> None:
+        """Enrich chunks appear as children of enrich."""
+        from aiotask import track
 
-        graph, _ = await self._make_graph()
-        output = render_text(graph)
-        assert isinstance(output, str)
-        assert "root" in output
-        assert "task-a" in output
-        assert "task-b" in output
+        async def chunk_fn() -> None:
+            await asyncio.sleep(0)
 
-    async def test_render_text_no_root(self) -> None:
-        from aiotask import TaskGraph, track
-        from aiotask._render import render_text
+        async def enrich_fn() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(chunk_fn)(), name="chunk-0")
+                tg.create_task(node(chunk_fn)(), name="chunk-1")
 
-        async def fn() -> None:
-            pass
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(enrich_fn)(), name="enrich")
 
-        root_task = asyncio.create_task(track(fn)(), name="only-task")
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
         await root_task
         await _flush()
 
-        graph = TaskGraph.current()
-        output = render_text(graph)
-        assert isinstance(output, str)
+        names = [info.name for info in walk_tree(root_id)]
+        assert names.index("enrich") < names.index("chunk-0")
+        assert names.index("enrich") < names.index("chunk-1")
 
-    async def test_render_text_empty_graph(self) -> None:
-        from aiotask import TaskGraph
-        from aiotask._render import render_text
+    async def test_walk_tree_with_root(self) -> None:
+        """Scoped traversal only yields subtree."""
+        from aiotask import track
 
-        graph = TaskGraph(root_id=999_999)
-        output = render_text(graph)
-        assert output == ""
+        async def fn() -> None:
+            await asyncio.sleep(0)
 
-    async def test_get_render_returns_callable(self) -> None:
-        from aiotask._render import get_render
+        subtree_id: int | None = None
 
-        render_fn = get_render(rich=False)
-        assert callable(render_fn)
+        async def branch() -> None:
+            nonlocal subtree_id
+            subtree_id = await get_task_id(_current_task())
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(fn)(), name="leaf")
 
-        graph, _ = await self._make_graph()
-        output = render_fn(graph)
-        assert isinstance(output, str)
-        assert len(output) > 0
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(fn)(), name="sibling")
+                tg.create_task(node(branch)(), name="branch")
 
-    async def test_render_text_contains_tree_chars(self) -> None:
-        from aiotask._render import render_text
+        root_task = asyncio.create_task(track(run)(), name="root")
+        await root_task
+        await _flush()
 
-        graph, _ = await self._make_graph()
-        output = render_text(graph)
-        # Should contain tree drawing characters
-        assert "├─" in output or "└─" in output
+        assert subtree_id is not None
+        names = {info.name for info in walk_tree(subtree_id)}
+        assert "branch" in names
+        assert "leaf" in names
+        assert "sibling" not in names
+        assert "root" not in names
 
-    async def test_render_dag_view(self) -> None:
-        import importlib.util
 
-        from aiotask._render import RenderConfig, render_text
+class TestWalkDag:
+    async def test_walk_dag_topological_order(self) -> None:
+        """Dependencies appear before dependents."""
+        from aiotask import track
 
-        graph, _ = await self._make_graph()
-        config = RenderConfig(view="dag")
-        output = render_text(graph, config)
+        async def fn() -> None:
+            await asyncio.sleep(0)
 
-        assert isinstance(output, str)
-        assert "task-a" in output
-        assert "task-b" in output
-        if importlib.util.find_spec("asciidag") is not None:
-            # asciidag renders graph characters
-            assert "*" in output
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                a = tg.create_task(node(fn)(), name="a")
+                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
+                tg.create_task(node(fn, wait_for=[b])(), name="c")
 
-    async def test_watch_completes_for_done_graph(self) -> None:
-        from aiotask._render import watch
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
+        await root_task
+        await _flush()
 
-        graph, _ = await self._make_graph()
+        names = [info.name for info in walk_dag(root_id)]
+        assert names.index("a") < names.index("b")
+        assert names.index("b") < names.index("c")
 
-        buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            await watch(graph, interval=0.01)
+    async def test_walk_dag_isolated_nodes_after_parent(self) -> None:
+        """Enrich chunks (no DAG deps) appear after their parent in topological order."""
+        from aiotask import track
 
-        output = buf.getvalue()
-        assert len(output) > 0
+        async def chunk_fn() -> None:
+            await asyncio.sleep(0)
+
+        async def enrich_fn() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(chunk_fn)(), name="chunk-0")
+                tg.create_task(node(chunk_fn)(), name="chunk-1")
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(enrich_fn)(), name="enrich")
+
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
+        await root_task
+        await _flush()
+
+        names = [info.name for info in walk_dag(root_id)]
+        assert names.index("enrich") < names.index("chunk-0")
+        assert names.index("enrich") < names.index("chunk-1")
+
+    async def test_walk_dag_with_root(self) -> None:
+        """Scoped traversal only yields subtree."""
+        from aiotask import track
+
+        async def fn() -> None:
+            await asyncio.sleep(0)
+
+        subtree_id: int | None = None
+
+        async def branch() -> None:
+            nonlocal subtree_id
+            subtree_id = await get_task_id(_current_task())
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(fn)(), name="leaf")
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(node(fn)(), name="sibling")
+                tg.create_task(node(branch)(), name="branch")
+
+        root_task = asyncio.create_task(track(run)(), name="root")
+        await root_task
+        await _flush()
+
+        assert subtree_id is not None
+        names = {info.name for info in walk_dag(subtree_id)}
+        assert "branch" in names
+        assert "leaf" in names
+        assert "sibling" not in names
+
+    async def test_walk_tree_and_dag_same_set(self) -> None:
+        """Both iterators yield the same tasks, possibly in different order."""
+        from aiotask import track
+
+        async def fn() -> None:
+            await asyncio.sleep(0)
+
+        async def run() -> None:
+            async with asyncio.TaskGroup() as tg:
+                a = tg.create_task(node(fn)(), name="a")
+                tg.create_task(node(fn, wait_for=[a])(), name="b")
+
+        root_task = asyncio.create_task(track(run)(), name="root")
+        root_id = await get_task_id(root_task)
+        await root_task
+        await _flush()
+
+        tree_ids = {info.id for info in walk_tree(root_id)}
+        dag_ids = {info.id for info in walk_dag(root_id)}
+        assert tree_ids == dag_ids
