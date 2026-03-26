@@ -1,17 +1,11 @@
 # aionode
 
-Lightweight asyncio task tracking with dependency graphs and progress rendering.
+Lightweight asyncio task tracking as call tree and DAG.
 
 ## Installation
 
 ```bash
 pip install aionode
-```
-
-For Rich table rendering:
-
-```bash
-pip install aionode[viz]
 ```
 
 ## Quick Start
@@ -34,12 +28,10 @@ async def pipeline() -> None:
         tg.create_task(aionode.node(process)(aionode.resolve(fetch)), name="process")
 
 async def main() -> None:
-    root = asyncio.create_task(aionode.track(pipeline)(), name="pipeline")
-    root_id = await aionode.get_task_id(root)
-    graph = aionode.TaskGraph(root_id=root_id)
-
-    await aionode.watch(graph, interval=0.3)
+    root = asyncio.create_task(aionode.node(pipeline)(), name="pipeline")
     await root
+    for info in aionode.walk_dag():
+        print(f"{info.name}: {info.status} ({info.duration():.2f}s)")
 
 asyncio.run(main())
 ```
@@ -73,57 +65,39 @@ Marks an awaitable to be resolved before being passed as an argument to `node()`
 result = await aionode.node(process)(aionode.resolve(upstream_task))
 ```
 
-### `track(func, start=True)`
+### `walk_tree` / `walk_dag`
 
-Tracks a coroutine by registering it in the task graph. Use this for the root task or tasks that don't need `node()`'s dependency resolution.
-
-```python
-root = asyncio.create_task(aionode.track(my_coro)(), name="root")
-```
-
-### `TaskGraph`
-
-Query the dependency graph:
+Iterate over tracked tasks after they have been created.
 
 ```python
-graph = aionode.TaskGraph(root_id=root_id)
+# DFS pre-order through the call tree (parent → children)
+for info in aionode.walk_tree():
+    print(info.name, info.status)
 
-graph.nodes()            # All tasks in topological order
-graph.roots()            # Tasks with no upstream deps
-graph.leaves()           # Tasks with no downstream dependents
-graph.upstream(task_id)  # Transitive upstream deps
-graph.downstream(task_id)  # Transitive downstream dependents
-graph.summary()          # {TaskStatus: count}
-graph.critical_path()    # Longest-duration path
+# Topological order over the DAG (deps → dependents)
+for info in aionode.walk_dag():
+    print(info.name, info.status)
 ```
 
-### Rendering
-
-```python
-# Auto-detect Rich or fall back to ANSI text
-renderer = aionode.get_render()
-
-# Force plain text
-renderer = aionode.get_render(rich=False)
-
-# Live-updating display
-await aionode.watch(graph, interval=0.5, renderer=renderer)
-```
+Both accept an optional `root` argument (an `asyncio.Task` or task id). Passing `None` (the default) includes all tasks in the current event loop.
 
 ### Task Inspection
 
 ```python
 task_id = await aionode.get_task_id(asyncio_task)
-info = aionode.get_task(task_id)
+info = aionode.get_task_info(task_id)
 
 info.status        # TaskStatus: WAITING, RUNNING, DONE, FAILED, CANCELLED
 info.duration()    # Elapsed seconds
-info.description   # Task name
+info.name          # Task name
 info.deps          # Upstream dependency IDs
 info.dependents    # Downstream dependent IDs
 info.logs          # Accumulated log output
 
 await aionode.log("processing record 42")  # Append to current task's logs
+
+# Get TaskInfo for the currently running tracked task
+info = aionode.current_task_info()
 ```
 
 ## API Reference
@@ -132,15 +106,12 @@ await aionode.log("processing record 42")  # Append to current task's logs
 |---|---|
 | `node(func, wait_for, track, auto_progress)` | Wrap an async function as a DAG node |
 | `resolve(awaitable)` | Mark an awaitable to be resolved as a node argument |
-| `track(func, start)` | Track a coroutine in the task graph |
 | `get_task_id(task, timeout)` | Get the task ID for an asyncio.Task |
-| `get_task(task_id)` | Get TaskInfo by ID |
+| `get_task_info(task_id)` | Get TaskInfo by ID |
+| `current_task_info()` | Get TaskInfo for the currently running tracked task |
 | `remove_task(task_id)` | Remove a task and its descendants |
 | `log(value, end)` | Append to the current task's logs |
 | `make_async(func)` | Run a sync function in a thread |
 | `make_async_generator(gen)` | Async iterate a sync iterator via threads |
-| `TaskGraph(root_id)` | Create a graph view rooted at a task |
-| `TaskGraph.from_task(task)` | Create a graph from an asyncio.Task |
-| `TaskGraph.current()` | Graph over all tasks in the current loop |
-| `get_render(rich, bar_width, ...)` | Get a configured render function |
-| `watch(graph, interval, renderer)` | Live-render until all tasks finish |
+| `walk_tree(root)` | DFS pre-order through the call tree |
+| `walk_dag(root)` | Topological order over the DAG |
