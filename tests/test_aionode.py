@@ -1,11 +1,11 @@
-"""Unit tests for aiotask - asyncio task tracking library."""
+"""Unit tests for aionode - asyncio task tracking library."""
 
 import asyncio
 from typing import Any
 
 import pytest
 
-from aiotask import (
+from aionode import (
     TaskStatus,
     get_task_id,
     get_task_info,
@@ -87,7 +87,7 @@ class TestTaskInfoImmutability:
 class TestTaskInfoMethods:
     async def test_started_false_before_init(self) -> None:
         """started() is False when started_at is None."""
-        from aiotask import TaskInfo, TaskStatus
+        from aionode import TaskInfo, TaskStatus
 
         # Build a minimal TaskInfo to test the method in isolation
         task = asyncio.create_task(asyncio.sleep(0))
@@ -138,7 +138,7 @@ class TestTaskInfoMethods:
         assert info.done() is True
 
     async def test_duration_zero_before_start(self) -> None:
-        from aiotask import TaskInfo, TaskStatus
+        from aionode import TaskInfo, TaskStatus
 
         task = asyncio.create_task(asyncio.sleep(0))
         info = TaskInfo(
@@ -310,7 +310,7 @@ class TestNodeCore:
         async def coro() -> None:
             # _init_task_info is called once by the wrapper; calling it again
             # via a second node wrapper should raise.
-            from aiotask import _init_task_info
+            from aionode import _init_task_info
 
             with pytest.raises(RuntimeError, match="already initialized"):
                 await _init_task_info()
@@ -426,7 +426,7 @@ class TestParentChild:
                 up = tg.create_task(node(upstream_fn)(), name="upstream")
                 tg.create_task(node(parent_fn)(resolve(up)), name="parent")
 
-        from aiotask import _task_id, track
+        from aionode import _task_id, track
         await asyncio.create_task(track(run)())
         await _flush()
 
@@ -787,7 +787,7 @@ class TestNode:
                 up = tg.create_task(node(upstream)(), name="up")
                 tg.create_task(node(downstream)(resolve(up)), name="down")
 
-        from aiotask import track
+        from aionode import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -824,7 +824,7 @@ class TestDepEdges:
 
                 tg.create_task(capture(), name="capture")
 
-        from aiotask import track
+        from aionode import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -865,7 +865,7 @@ class TestDepEdges:
 
                 tg.create_task(capture(), name="capture")
 
-        from aiotask import track
+        from aionode import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -904,7 +904,7 @@ class TestDepEdges:
 
                 tg.create_task(capture(), name="capture")
 
-        from aiotask import track
+        from aionode import track
 
         await asyncio.create_task(track(run)())
         await _flush()
@@ -935,7 +935,7 @@ class TestNodeOptions:
 
     async def test_node_auto_progress_false(self) -> None:
         """node(fn, auto_progress=False) should not auto-count its own sub-children."""
-        from aiotask import track
+        from aionode import track
 
         async def grandchild_fn() -> None:
             pass
@@ -975,7 +975,7 @@ class TestNodeOptions:
 class TestDiamondDeps:
     async def test_diamond_dependency(self) -> None:
         """A -> B, A -> C, B -> D, C -> D — diamond pattern."""
-        from aiotask import track
+        from aionode import track
 
         async def fn() -> None:
             await asyncio.sleep(0)
@@ -1052,7 +1052,7 @@ class TestErrorPropagation:
 class TestCircularDeps:
     async def test_circular_dep_raises(self) -> None:
         """Creating a circular dependency should raise RuntimeError."""
-        from aiotask import _register_dep, track
+        from aionode import _register_dep, track
 
         async def fn() -> None:
             await asyncio.sleep(10)
@@ -1087,7 +1087,7 @@ class TestCircularDeps:
 class TestWalkTree:
     async def test_walk_tree_dfs_order(self) -> None:
         """Parent appears before its children in DFS pre-order."""
-        from aiotask import track
+        from aionode import track
 
         async def child_fn() -> None:
             await asyncio.sleep(0)
@@ -1111,7 +1111,7 @@ class TestWalkTree:
 
     async def test_walk_tree_respects_subtasks(self) -> None:
         """Enrich chunks appear as children of enrich."""
-        from aiotask import track
+        from aionode import track
 
         async def chunk_fn() -> None:
             await asyncio.sleep(0)
@@ -1136,7 +1136,7 @@ class TestWalkTree:
 
     async def test_walk_tree_with_root(self) -> None:
         """Scoped traversal only yields subtree."""
-        from aiotask import track
+        from aionode import track
 
         async def fn() -> None:
             await asyncio.sleep(0)
@@ -1169,7 +1169,7 @@ class TestWalkTree:
 class TestWalkDag:
     async def test_walk_dag_topological_order(self) -> None:
         """Dependencies appear before dependents."""
-        from aiotask import track
+        from aionode import track
 
         async def fn() -> None:
             await asyncio.sleep(0)
@@ -1191,7 +1191,7 @@ class TestWalkDag:
 
     async def test_walk_dag_isolated_nodes_after_parent(self) -> None:
         """Enrich chunks (no DAG deps) appear after their parent in topological order."""
-        from aiotask import track
+        from aionode import track
 
         async def chunk_fn() -> None:
             await asyncio.sleep(0)
@@ -1216,7 +1216,7 @@ class TestWalkDag:
 
     async def test_walk_dag_with_root(self) -> None:
         """Scoped traversal only yields subtree."""
-        from aiotask import track
+        from aionode import track
 
         async def fn() -> None:
             await asyncio.sleep(0)
@@ -1246,7 +1246,7 @@ class TestWalkDag:
 
     async def test_walk_tree_and_dag_same_set(self) -> None:
         """Both iterators yield the same tasks, possibly in different order."""
-        from aiotask import track
+        from aionode import track
 
         async def fn() -> None:
             await asyncio.sleep(0)

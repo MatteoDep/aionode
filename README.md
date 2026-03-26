@@ -1,24 +1,24 @@
-# aiotask
+# aionode
 
 Lightweight asyncio task tracking with dependency graphs and progress rendering.
 
 ## Installation
 
 ```bash
-pip install aiotask
+pip install aionode
 ```
 
 For Rich table rendering:
 
 ```bash
-pip install aiotask[viz]
+pip install aionode[viz]
 ```
 
 ## Quick Start
 
 ```python
 import asyncio
-import aiotask
+import aionode
 
 async def fetch_data() -> list[int]:
     await asyncio.sleep(1)
@@ -30,15 +30,15 @@ async def process(data: list[int]) -> int:
 
 async def pipeline() -> None:
     async with asyncio.TaskGroup() as tg:
-        fetch = tg.create_task(aiotask.node(fetch_data)(), name="fetch")
-        tg.create_task(aiotask.node(process)(aiotask.resolve(fetch)), name="process")
+        fetch = tg.create_task(aionode.node(fetch_data)(), name="fetch")
+        tg.create_task(aionode.node(process)(aionode.resolve(fetch)), name="process")
 
 async def main() -> None:
-    root = asyncio.create_task(aiotask.track(pipeline)(), name="pipeline")
-    root_id = await aiotask.get_task_id(root)
-    graph = aiotask.TaskGraph(root_id=root_id)
+    root = asyncio.create_task(aionode.track(pipeline)(), name="pipeline")
+    root_id = await aionode.get_task_id(root)
+    graph = aionode.TaskGraph(root_id=root_id)
 
-    await aiotask.watch(graph, interval=0.3)
+    await aionode.watch(graph, interval=0.3)
     await root
 
 asyncio.run(main())
@@ -52,17 +52,17 @@ Wraps an async function as a DAG node. Use `resolve()` to pass awaitables as arg
 
 ```python
 # Async function — pass upstream tasks with resolve()
-fetch = tg.create_task(aiotask.node(fetch_data)(), name="fetch")
-process_task = tg.create_task(aiotask.node(process)(aiotask.resolve(fetch)), name="process")
+fetch = tg.create_task(aionode.node(fetch_data)(), name="fetch")
+process_task = tg.create_task(aionode.node(process)(aionode.resolve(fetch)), name="process")
 
 # Sync function — wrap with make_async first
 summarize = tg.create_task(
-    aiotask.node(aiotask.make_async(my_sync_fn))(aiotask.resolve(process_task)),
+    aionode.node(aionode.make_async(my_sync_fn))(aionode.resolve(process_task)),
     name="summarize",
 )
 
 # Side-only dependency (no value passed): use wait_for
-task_b = tg.create_task(aiotask.node(cleanup, wait_for=[fetch])(), name="cleanup")
+task_b = tg.create_task(aionode.node(cleanup, wait_for=[fetch])(), name="cleanup")
 ```
 
 ### `resolve(awaitable)`
@@ -70,7 +70,7 @@ task_b = tg.create_task(aiotask.node(cleanup, wait_for=[fetch])(), name="cleanup
 Marks an awaitable to be resolved before being passed as an argument to `node()`. This preserves type information — the type checker sees `resolve(task: Task[T])` as returning `T`.
 
 ```python
-result = await aiotask.node(process)(aiotask.resolve(upstream_task))
+result = await aionode.node(process)(aionode.resolve(upstream_task))
 ```
 
 ### `track(func, start=True)`
@@ -78,7 +78,7 @@ result = await aiotask.node(process)(aiotask.resolve(upstream_task))
 Tracks a coroutine by registering it in the task graph. Use this for the root task or tasks that don't need `node()`'s dependency resolution.
 
 ```python
-root = asyncio.create_task(aiotask.track(my_coro)(), name="root")
+root = asyncio.create_task(aionode.track(my_coro)(), name="root")
 ```
 
 ### `TaskGraph`
@@ -86,7 +86,7 @@ root = asyncio.create_task(aiotask.track(my_coro)(), name="root")
 Query the dependency graph:
 
 ```python
-graph = aiotask.TaskGraph(root_id=root_id)
+graph = aionode.TaskGraph(root_id=root_id)
 
 graph.nodes()            # All tasks in topological order
 graph.roots()            # Tasks with no upstream deps
@@ -101,20 +101,20 @@ graph.critical_path()    # Longest-duration path
 
 ```python
 # Auto-detect Rich or fall back to ANSI text
-renderer = aiotask.get_render()
+renderer = aionode.get_render()
 
 # Force plain text
-renderer = aiotask.get_render(rich=False)
+renderer = aionode.get_render(rich=False)
 
 # Live-updating display
-await aiotask.watch(graph, interval=0.5, renderer=renderer)
+await aionode.watch(graph, interval=0.5, renderer=renderer)
 ```
 
 ### Task Inspection
 
 ```python
-task_id = await aiotask.get_task_id(asyncio_task)
-info = aiotask.get_task(task_id)
+task_id = await aionode.get_task_id(asyncio_task)
+info = aionode.get_task(task_id)
 
 info.status        # TaskStatus: WAITING, RUNNING, DONE, FAILED, CANCELLED
 info.duration()    # Elapsed seconds
@@ -123,7 +123,7 @@ info.deps          # Upstream dependency IDs
 info.dependents    # Downstream dependent IDs
 info.logs          # Accumulated log output
 
-await aiotask.log("processing record 42")  # Append to current task's logs
+await aionode.log("processing record 42")  # Append to current task's logs
 ```
 
 ## API Reference

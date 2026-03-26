@@ -1,5 +1,5 @@
 """
-aiotask demo — dependency graph with walk_tree / walk_dag traversal.
+aionode demo — dependency graph with walk_tree / walk_dag traversal.
 
 Features showcased:
   - resolve()         pass an asyncio.Task as a coroutine argument
@@ -26,21 +26,21 @@ DAG shape:
 
 import asyncio
 
-import aiotask
+import aionode
 
 # ── step functions ────────────────────────────────────────────────────────────
 
 
 async def fetch_data() -> list[int]:
     await asyncio.sleep(1)
-    await aiotask.log("fetched 100 records")
+    await aionode.log("fetched 100 records")
     return list(range(100))
 
 
 async def validate(data: list[int]) -> list[int]:
     await asyncio.sleep(0.5)
     valid = [x for x in data if x % 2 == 0]
-    await aiotask.log(f"kept {len(valid)} valid records")
+    await aionode.log(f"kept {len(valid)} valid records")
     return valid
 
 
@@ -54,20 +54,20 @@ async def enrich(data: list[int]) -> list[int]:
     async with asyncio.TaskGroup() as tg:
         subtasks = [
             tg.create_task(
-                aiotask.node(_enrich_chunk)(chunk),
+                aionode.node(_enrich_chunk)(chunk),
                 name=f"enrich-chunk-{i}",
             )
             for i, chunk in enumerate(chunks)
         ]
     result = [x for t in subtasks for x in t.result()]
-    await aiotask.log(f"enrichment complete: {len(result)} records")
+    await aionode.log(f"enrichment complete: {len(result)} records")
     return result
 
 
 async def process(data: list[int]) -> list[int]:
     """Process data in chunks, updating progress via TaskInfo.update()."""
     # Retrieve our own TaskInfo so we can push granular progress updates.
-    info = aiotask.current_task_info()
+    info = aionode.current_task_info()
 
     chunks = [data[i : i + 10] for i in range(0, len(data), 10)]
     await info.update(total=len(chunks), completed=0)
@@ -80,21 +80,21 @@ async def process(data: list[int]) -> list[int]:
             completed=i + 1,
         )
 
-    await aiotask.log(f"processed {len(result)} records in {len(chunks)} chunks")
+    await aionode.log(f"processed {len(result)} records in {len(chunks)} chunks")
     return result
 
 
 async def load(processed: list[int], enriched: list[int]) -> int:
     merged = processed + enriched
     await asyncio.sleep(0.8)
-    await aiotask.log(f"loaded {len(merged)} records")
+    await aionode.log(f"loaded {len(merged)} records")
     return len(merged)
 
 
 async def notify() -> None:
     """Fire-and-forget notification — waits for load but doesn't need its result."""
     await asyncio.sleep(0.2)
-    await aiotask.log("downstream systems notified")
+    await aionode.log("downstream systems notified")
 
 
 def summarize(count: int) -> str:
@@ -108,33 +108,33 @@ def summarize(count: int) -> str:
 async def pipeline() -> None:
     async with asyncio.TaskGroup() as tg:
         fetch = tg.create_task(
-            aiotask.node(fetch_data)(),
+            aionode.node(fetch_data)(),
             name="fetch",
         )
         valid = tg.create_task(
-            aiotask.node(validate)(aiotask.resolve(fetch)),
+            aionode.node(validate)(aionode.resolve(fetch)),
             name="validate",
         )
         enriched = tg.create_task(
-            aiotask.node(enrich)(aiotask.resolve(fetch)),
+            aionode.node(enrich)(aionode.resolve(fetch)),
             name="enrich",
         )
         processed = tg.create_task(
-            aiotask.node(process)(aiotask.resolve(valid)),
+            aionode.node(process)(aionode.resolve(valid)),
             name="process",
         )
         loaded = tg.create_task(
-            aiotask.node(load)(aiotask.resolve(processed), aiotask.resolve(enriched)),
+            aionode.node(load)(aionode.resolve(processed), aionode.resolve(enriched)),
             name="load",
         )
         # wait_for: notify runs after load completes without receiving its return value
         tg.create_task(
-            aiotask.node(notify, wait_for=[loaded])(),
+            aionode.node(notify, wait_for=[loaded])(),
             name="notify",
         )
         # make_async: wrap a sync function so node() can track it
         tg.create_task(
-            aiotask.node(aiotask.make_async(summarize))(aiotask.resolve(loaded)),
+            aionode.node(aionode.make_async(summarize))(aionode.resolve(loaded)),
             name="summarize",
         )
 
@@ -142,38 +142,38 @@ async def pipeline() -> None:
 # ── rendering helpers ─────────────────────────────────────────────────────────
 
 
-def _status_icon(info: aiotask.TaskInfo) -> str:
+def _status_icon(info: aionode.TaskInfo) -> str:
     match info.status:
-        case aiotask.TaskStatus.DONE:
+        case aionode.TaskStatus.DONE:
             return "+"
-        case aiotask.TaskStatus.FAILED:
+        case aionode.TaskStatus.FAILED:
             return "x"
-        case aiotask.TaskStatus.RUNNING:
+        case aionode.TaskStatus.RUNNING:
             return "~"
-        case aiotask.TaskStatus.CANCELLED:
+        case aionode.TaskStatus.CANCELLED:
             return "!"
         case _:
             return "."
 
 
-def _progress(info: aiotask.TaskInfo) -> str:
+def _progress(info: aionode.TaskInfo) -> str:
     if info.total is not None:
         return f" [{info.completed:.0f}/{info.total:.0f}]"
     return ""
 
 
 def print_tree(root_id: int) -> None:
-    for info in aiotask.walk_tree(root_id):
+    for info in aionode.walk_tree(root_id):
         indent = "  " * info.tree_depth
         icon = _status_icon(info)
         print(f"{indent}[{icon}] {info.name}{_progress(info)}  ({info.duration():.2f}s)")
 
 
 def print_dag(root_id: int) -> None:
-    for info in aiotask.walk_dag(root_id):
+    for info in aionode.walk_dag(root_id):
         isolated = " (isolated)" if not info.deps and not info.dependents else ""
         dep_names = ", ".join(
-            aiotask.get_task_info(d).name for d in info.deps
+            aionode.get_task_info(d).name for d in info.deps
         )
         deps_str = f"  <- {dep_names}" if dep_names else ""
         icon = _status_icon(info)
@@ -184,8 +184,8 @@ def print_dag(root_id: int) -> None:
 
 
 async def main() -> None:
-    root = asyncio.create_task(aiotask.node(pipeline)(), name="ETL Pipeline")
-    root_id = await aiotask.get_task_id(root)
+    root = asyncio.create_task(aionode.node(pipeline)(), name="ETL Pipeline")
+    root_id = await aionode.get_task_id(root)
     await root
 
     # Let done-callbacks finish
@@ -200,9 +200,9 @@ async def main() -> None:
 
     # Show isolated nodes (enrich chunks have no DAG deps/dependents)
     print("\n── Isolated nodes ──────────────────────")
-    for info in aiotask.walk_dag(root_id):
+    for info in aionode.walk_dag(root_id):
         if not info.deps and not info.dependents:
-            parent_name = aiotask.get_task_info(info.parent).name if info.parent is not None else "none"
+            parent_name = aionode.get_task_info(info.parent).name if info.parent is not None else "none"
             print(f"  {info.name} (parent: {parent_name})")
 
 

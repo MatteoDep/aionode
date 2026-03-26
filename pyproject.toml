@@ -1,7 +1,7 @@
 [project]
-name = "aiotask"
+name = "aionode"
 dynamic = ["version"]
-description = "Lightweight asyncio task tracking with dependency graphs and progress rendering"
+description = "Lightweight asyncio task tracking as call tree and DAG"
 readme = "README.md"
 authors = [
     { name = "Matteo De Pellegrin", email = "matteo.dep97@gmail.com" }
@@ -11,8 +11,8 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/MatteoDep/aiotask"
-Issues = "https://github.com/MatteoDep/aiotask/issues"
+Repository = "https://github.com/MatteoDep/aionode"
+Issues = "https://github.com/MatteoDep/aionode/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
