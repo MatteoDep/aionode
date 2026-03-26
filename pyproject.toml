@@ -1,13 +1,18 @@
 [project]
 name = "aiotask"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Lightweight asyncio task tracking with dependency graphs and progress rendering"
 readme = "README.md"
 authors = [
     { name = "Matteo De Pellegrin", email = "matteo.dep97@gmail.com" }
 ]
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/MatteoDep/aiotask"
+Issues = "https://github.com/MatteoDep/aiotask/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
