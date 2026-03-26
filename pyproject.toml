@@ -1,13 +1,18 @@
 [project]
-name = "aiotask"
+name = "aionode"
 version = "0.1.0"
-description = "Add your description here"
+description = "Lightweight asyncio task tracking as call tree and DAG"
 readme = "README.md"
 authors = [
     { name = "Matteo De Pellegrin", email = "matteo.dep97@gmail.com" }
 ]
-requires-python = ">=3.14"
+license = "MIT"
+requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/MatteoDep/aionode"
+Issues = "https://github.com/MatteoDep/aionode/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
