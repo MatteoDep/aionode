@@ -6,7 +6,9 @@ from typing import Any
 import pytest
 
 from aionode import (
+    TaskInfo,
     TaskStatus,
+    current_task_info,
     get_task_id,
     get_task_info,
     log,
@@ -87,7 +89,6 @@ class TestTaskInfoImmutability:
 class TestTaskInfoMethods:
     async def test_started_false_before_init(self) -> None:
         """started() is False when started_at is None."""
-        from aionode import TaskInfo, TaskStatus
 
         # Build a minimal TaskInfo to test the method in isolation
         task = asyncio.create_task(asyncio.sleep(0))
@@ -138,7 +139,6 @@ class TestTaskInfoMethods:
         assert info.done() is True
 
     async def test_duration_zero_before_start(self) -> None:
-        from aionode import TaskInfo, TaskStatus
 
         task = asyncio.create_task(asyncio.sleep(0))
         info = TaskInfo(
@@ -406,19 +406,19 @@ class TestParentChild:
         await asyncio.create_task(node(parent_coro)())
 
     async def test_subtask_does_not_inherit_parent_deps(self) -> None:
-        """Subtasks created inside a node body get parent's depth + 1 but not its dep edges."""
+        """Subtasks created inside a node body inherit things correctly."""
         child_ids: list[int] = []
         upstream_ids: list[int] = []
 
         async def child_fn() -> None:
-            child_ids.append(_task_id.get())
+            child_ids.append(current_task_info().id)
 
         async def parent_fn(x: int) -> None:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(node(child_fn)(), name="child")
 
         async def upstream_fn() -> int:
-            upstream_ids.append(_task_id.get())
+            upstream_ids.append(current_task_info().id)
             return 1
 
         async def run() -> None:
@@ -426,7 +426,6 @@ class TestParentChild:
                 up = tg.create_task(node(upstream_fn)(), name="upstream")
                 tg.create_task(node(parent_fn)(resolve(up)), name="parent")
 
-        from aionode import _task_id
         await asyncio.create_task(node(run)())
         await _flush()
 
@@ -863,8 +862,6 @@ class TestDepEdges:
 
                 tg.create_task(capture(), name="capture")
 
-        from aionode import node
-
         await asyncio.create_task(node(run)())
         await _flush()
 
@@ -901,8 +898,6 @@ class TestDepEdges:
                     c_ids.append(await get_task_id(c))
 
                 tg.create_task(capture(), name="capture")
-
-        from aionode import node
 
         await asyncio.create_task(node(run)())
         await _flush()
