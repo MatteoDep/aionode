@@ -1,9 +1,6 @@
-from __future__ import annotations
-
-__version__ = "0.1.0"
-
 import asyncio
 import functools
+import importlib.metadata
 import inspect
 import threading
 import time
@@ -15,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol, cast, runtime_checkable
+
+__version__ = importlib.metadata.version("aionode")
 
 
 @dataclass(slots=True)
@@ -173,7 +172,7 @@ class TaskInfo:
 
     def subtasks_info(
         self,
-        fmt: Callable[[TaskInfo], str] = "- {0.name}: {0.status.value}".format,
+        fmt: Callable[["TaskInfo"], str] = "- {0.name}: {0.status.value}".format,
         sep: str = "\n",
         all_subtasks: bool = False,
     ) -> str:
@@ -204,7 +203,7 @@ _task_id: ContextVar[int] = ContextVar("task_id")
 
 @dataclass
 class _LoopState:
-    task_infos: dict[int, TaskInfo] = field(default_factory=dict)
+    task_infos: dict[int, "TaskInfo"] = field(default_factory=dict)
     task_ids: dict[asyncio.Task, int] = field(default_factory=dict)
     background_tasks: set[asyncio.Task] = field(default_factory=set)
     _next_id: int = field(default=0)
