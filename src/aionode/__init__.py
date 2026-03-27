@@ -119,9 +119,9 @@ class TaskInfo:
     task: asyncio.Task
     name: str
     parent: int | None
-    subtasks: list[int]
-    running_subtasks: list[int]
     status: TaskStatus
+    subtasks: tuple[int, ...] = ()
+    running_subtasks: tuple[int, ...] = ()
     started_at: datetime | None = None
     finished_at: datetime | None = None
     exception: BaseException | None = None
@@ -129,8 +129,8 @@ class TaskInfo:
     completed: float = 0
     total: float | None = None
     auto_progress: bool = True
-    deps: list[int] = field(default_factory=list)
-    dependents: list[int] = field(default_factory=list)
+    deps: tuple[int, ...] = ()
+    dependents: tuple[int, ...] = ()
     tree_depth: int = 0
     dag_depth: int = 0
     _start_mono: float | None = field(default=None, repr=False, compare=False)
@@ -255,7 +255,9 @@ async def _update_parent(task_id: int, parent_id: int, auto_progress: bool) -> N
         if auto_progress:
             parent_task_info.completed = (parent_task_info.completed or 0) + 1
         if task_id in parent_task_info.running_subtasks:
-            parent_task_info.running_subtasks.remove(task_id)
+            parent_task_info.running_subtasks = tuple(
+                tid for tid in parent_task_info.running_subtasks if tid != task_id
+            )
 
 
 def _add_done_callback(task: asyncio.Task, task_id: int, state: _LoopState) -> None:
@@ -318,12 +320,10 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         id=task_id,
         name=task_name,
         parent=parent_id,
-        subtasks=[],
         started_at=datetime.now() if start else None,
         _start_mono=time.monotonic() if start else None,
         status=TaskStatus.RUNNING if start else TaskStatus.WAITING,
         task=task,
-        running_subtasks=[],
         auto_progress=auto_progress,
         tree_depth=parent_tree_depth + 1,
         dag_depth=0,
@@ -335,9 +335,9 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
         if parent_id is not None:
             parent_task_info = state.task_infos[parent_id]
             async with parent_task_info.allow_edit():
-                parent_task_info.subtasks.append(task_id)
+                parent_task_info.subtasks = (*parent_task_info.subtasks, task_id)
                 if start:
-                    parent_task_info.running_subtasks.append(task_id)
+                    parent_task_info.running_subtasks = (*parent_task_info.running_subtasks, task_id)
                 _add_update_parent_callback(
                     task,
                     task_id=task_id,
@@ -350,7 +350,6 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
                     parent_task_info.total = total + 1
         state.task_ids[task] = task_id
         _task_id.set(task_id)
-
 
 
 async def _start_task() -> None:
@@ -368,7 +367,7 @@ async def _start_task() -> None:
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
         async with parent_info.allow_edit():
-            parent_info.running_subtasks.append(task_id)
+            parent_info.running_subtasks = (*parent_info.running_subtasks, task_id)
 
 
 def _would_cycle(state: _LoopState, from_id: int, to_id: int) -> bool:
@@ -405,13 +404,13 @@ async def _register_dep(from_id: int, to_id: int) -> None:
         raise RuntimeError(msg)
     async with from_info.allow_edit():
         if to_id not in from_info.deps:
-            from_info.deps.append(to_id)
+            from_info.deps = (*from_info.deps, to_id)
         new_dag_depth = to_info.dag_depth + 1
         if new_dag_depth > from_info.dag_depth:
             from_info.dag_depth = new_dag_depth
     async with to_info.allow_edit():
         if from_id not in to_info.dependents:
-            to_info.dependents.append(from_id)
+            to_info.dependents = (*to_info.dependents, from_id)
 
 
 async def log(value: str = "", end: str = "\n") -> None:
