@@ -293,12 +293,10 @@ class TestNodeCore:
         task_id = await get_task_id(task)
         assert captured == [task_id]
 
-    async def test_double_init_raises(self) -> None:
-        """Calling track on a task that already has info must raise."""
+    async def test_double_init_without_inline_raises(self) -> None:
+        """Calling _init_task_info without inline=True on an already-tracked task must raise."""
 
         async def coro() -> None:
-            # _init_task_info is called once by the wrapper; calling it again
-            # via a second node wrapper should raise.
             from aionode import _init_task_info
 
             with pytest.raises(RuntimeError, match="already initialized"):
@@ -403,7 +401,7 @@ class TestParentChild:
 
         async def parent_fn(x: int) -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(child_fn)(), name="child")
+                tg.create_task(node(child_fn, name="child")())
 
         async def upstream_fn() -> int:
             upstream_ids.append(current_task_info().id)
@@ -411,8 +409,8 @@ class TestParentChild:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                up = tg.create_task(node(upstream_fn)(), name="upstream")
-                tg.create_task(node(parent_fn)(resolve(up)), name="parent")
+                up = tg.create_task(node(upstream_fn, name="upstream")())
+                tg.create_task(node(parent_fn, name="parent")(resolve(up)))
 
         await asyncio.create_task(node(run)())
 
@@ -766,8 +764,8 @@ class TestNode:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                up = tg.create_task(node(upstream)(), name="up")
-                tg.create_task(node(downstream)(resolve(up)), name="down")
+                up = tg.create_task(node(upstream, name="up")())
+                tg.create_task(node(downstream, name="down")(resolve(up)))
 
 
         await asyncio.create_task(node(run)())
@@ -793,8 +791,8 @@ class TestDepEdges:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                up = tg.create_task(node(upstream_fn)(), name="upstream")
-                down = tg.create_task(node(downstream_fn)(resolve(up)), name="downstream")
+                up = tg.create_task(node(upstream_fn, name="upstream")())
+                down = tg.create_task(node(downstream_fn, name="downstream")(resolve(up)))
 
                 async def capture() -> None:
                     up_id = await get_task_id(up)
@@ -832,8 +830,8 @@ class TestDepEdges:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                up = tg.create_task(node(upstream_fn)(), name="upstream")
-                down = tg.create_task(node(downstream_fn, wait_for=[up])(), name="downstream")
+                up = tg.create_task(node(upstream_fn, name="upstream")())
+                down = tg.create_task(node(downstream_fn, wait_for=[up], name="downstream")())
 
                 async def capture() -> None:
                     up_id = await get_task_id(up)
@@ -868,9 +866,9 @@ class TestDepEdges:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
-                c = tg.create_task(node(fn, wait_for=[b])(), name="c")
+                a = tg.create_task(node(fn, name="a")())
+                b = tg.create_task(node(fn, wait_for=[a], name="b")())
+                c = tg.create_task(node(fn, wait_for=[b], name="c")())
 
                 async def capture() -> None:
                     a_ids.append(await get_task_id(a))
@@ -912,7 +910,7 @@ class TestNodeOptions:
             pass
 
         async def child_fn() -> None:
-            gc_task = asyncio.create_task(node(grandchild_fn)(), name="grandchild")
+            gc_task = asyncio.create_task(node(grandchild_fn, name="grandchild")())
             await gc_task
             task_id = await get_task_id(_current_task())
             info = get_task_info(task_id)
@@ -921,7 +919,7 @@ class TestNodeOptions:
 
         async def run() -> None:
             child_task = asyncio.create_task(
-                node(child_fn, auto_progress=False)(), name="no-progress-child"
+                node(child_fn, auto_progress=False, name="no-progress-child")()
             )
             await child_task
 
@@ -953,10 +951,10 @@ class TestDiamondDeps:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
-                c = tg.create_task(node(fn, wait_for=[a])(), name="c")
-                d = tg.create_task(node(fn, wait_for=[b, c])(), name="d")
+                a = tg.create_task(node(fn, name="a")())
+                b = tg.create_task(node(fn, wait_for=[a], name="b")())
+                c = tg.create_task(node(fn, wait_for=[a], name="c")())
+                d = tg.create_task(node(fn, wait_for=[b, c], name="d")())
 
                 async def capture() -> None:
                     ids["a"] = await get_task_id(a)
@@ -1005,8 +1003,8 @@ class TestErrorPropagation:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                up = tg.create_task(node(failing_fn)(), name="failing")
-                tg.create_task(node(downstream_fn)(resolve(up)), name="downstream")
+                up = tg.create_task(node(failing_fn, name="failing")())
+                tg.create_task(node(downstream_fn, name="downstream")(resolve(up)))
 
         with pytest.raises(ExceptionGroup):
             await asyncio.create_task(node(run)())
@@ -1027,8 +1025,8 @@ class TestCircularDeps:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
+                a = tg.create_task(node(fn, name="a")())
+                b = tg.create_task(node(fn, wait_for=[a], name="b")())
 
                 a_id = await get_task_id(a)
                 b_id = await get_task_id(b)
@@ -1060,10 +1058,10 @@ class TestWalkTree:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(child_fn)(), name="c1")
-                tg.create_task(node(child_fn)(), name="c2")
+                tg.create_task(node(child_fn, name="c1")())
+                tg.create_task(node(child_fn, name="c2")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         root_id = await get_task_id(root_task)
         await root_task
 
@@ -1082,14 +1080,14 @@ class TestWalkTree:
 
         async def enrich_fn() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(chunk_fn)(), name="chunk-0")
-                tg.create_task(node(chunk_fn)(), name="chunk-1")
+                tg.create_task(node(chunk_fn, name="chunk-0")())
+                tg.create_task(node(chunk_fn, name="chunk-1")())
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(enrich_fn)(), name="enrich")
+                tg.create_task(node(enrich_fn, name="enrich")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         root_id = await get_task_id(root_task)
         await root_task
 
@@ -1109,14 +1107,14 @@ class TestWalkTree:
             nonlocal subtree_id
             subtree_id = await get_task_id(_current_task())
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="leaf")
+                tg.create_task(node(fn, name="leaf")())
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="sibling")
-                tg.create_task(node(branch)(), name="branch")
+                tg.create_task(node(fn, name="sibling")())
+                tg.create_task(node(branch, name="branch")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         await root_task
 
         assert subtree_id is not None
@@ -1136,11 +1134,11 @@ class TestWalkDag:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                b = tg.create_task(node(fn, wait_for=[a])(), name="b")
-                tg.create_task(node(fn, wait_for=[b])(), name="c")
+                a = tg.create_task(node(fn, name="a")())
+                b = tg.create_task(node(fn, wait_for=[a], name="b")())
+                tg.create_task(node(fn, wait_for=[b], name="c")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         root_id = await get_task_id(root_task)
         await root_task
 
@@ -1156,14 +1154,14 @@ class TestWalkDag:
 
         async def enrich_fn() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(chunk_fn)(), name="chunk-0")
-                tg.create_task(node(chunk_fn)(), name="chunk-1")
+                tg.create_task(node(chunk_fn, name="chunk-0")())
+                tg.create_task(node(chunk_fn, name="chunk-1")())
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(enrich_fn)(), name="enrich")
+                tg.create_task(node(enrich_fn, name="enrich")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         root_id = await get_task_id(root_task)
         await root_task
 
@@ -1183,14 +1181,14 @@ class TestWalkDag:
             nonlocal subtree_id
             subtree_id = await get_task_id(_current_task())
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="leaf")
+                tg.create_task(node(fn, name="leaf")())
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(node(fn)(), name="sibling")
-                tg.create_task(node(branch)(), name="branch")
+                tg.create_task(node(fn, name="sibling")())
+                tg.create_task(node(branch, name="branch")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         await root_task
 
         assert subtree_id is not None
@@ -1207,13 +1205,184 @@ class TestWalkDag:
 
         async def run() -> None:
             async with asyncio.TaskGroup() as tg:
-                a = tg.create_task(node(fn)(), name="a")
-                tg.create_task(node(fn, wait_for=[a])(), name="b")
+                a = tg.create_task(node(fn, name="a")())
+                tg.create_task(node(fn, wait_for=[a], name="b")())
 
-        root_task = asyncio.create_task(node(run)(), name="root")
+        root_task = asyncio.create_task(node(run, name="root")())
         root_id = await get_task_id(root_task)
         await root_task
 
         tree_ids = {info.id for info in walk_tree(root_id)}
         dag_ids = {info.id for info in walk_dag(root_id)}
         assert tree_ids == dag_ids
+
+
+# ---------------------------------------------------------------------------
+# Inline node() — direct await without create_task
+# ---------------------------------------------------------------------------
+
+
+class TestInlineNode:
+    async def test_inline_node_creates_child_span(self) -> None:
+        """await node(fn)() inside a tracked task creates a child subtask."""
+        parent_id_holder: list[int] = []
+        child_id_holder: list[int] = []
+
+        async def child() -> int:
+            child_id_holder.append((await get_task_id(_current_task())))
+            return 42
+
+        async def parent() -> None:
+            parent_id_holder.append((await get_task_id(_current_task())))
+            result = await node(child)()
+            assert result == 42
+
+        await asyncio.create_task(node(parent)())
+
+        parent_info = get_task_info(parent_id_holder[0])
+        # child should appear in parent's subtasks
+        assert len(parent_info.subtasks) == 1
+        child_info = get_task_info(parent_info.subtasks[0])
+        assert child_info.parent == parent_id_holder[0]
+        assert child_info.status == TaskStatus.DONE
+
+    async def test_inline_node_restores_parent_task_id(self) -> None:
+        """After inline node completes, _task_id is restored to parent."""
+        from aionode import _task_id
+
+        ids_before_after: list[int] = []
+
+        async def child() -> None:
+            pass
+
+        async def parent() -> None:
+            ids_before_after.append(_task_id.get())
+            await node(child)()
+            ids_before_after.append(_task_id.get())
+
+        await asyncio.create_task(node(parent)())
+        assert ids_before_after[0] == ids_before_after[1]
+
+    async def test_inline_node_timing(self) -> None:
+        """Inline child has its own started_at and finished_at."""
+
+        async def child() -> None:
+            await asyncio.sleep(0)
+
+        child_id_holder: list[int] = []
+
+        async def parent() -> None:
+            await node(child)()
+            parent_info = current_task_info()
+            assert len(parent_info.subtasks) == 1
+            child_id_holder.append(parent_info.subtasks[0])
+
+        await asyncio.create_task(node(parent)())
+        child_info = get_task_info(child_id_holder[0])
+        assert child_info.started_at is not None
+        assert child_info.finished_at is not None
+
+    async def test_nested_inline_nodes(self) -> None:
+        """Two levels of inline nesting work correctly."""
+        from aionode import _task_id
+
+        depth_ids: list[int] = []
+
+        async def grandchild() -> None:
+            depth_ids.append(_task_id.get())
+
+        async def child() -> None:
+            depth_ids.append(_task_id.get())
+            await node(grandchild)()
+            # _task_id should be restored to child's id
+            assert _task_id.get() == depth_ids[-2]  # noqa: RUF100
+
+        async def parent() -> None:
+            depth_ids.append(_task_id.get())
+            await node(child)()
+            # _task_id should be restored to parent's id
+            assert _task_id.get() == depth_ids[0]
+
+        await asyncio.create_task(node(parent)())
+
+        # 3 distinct node IDs
+        assert len(set(depth_ids)) == 3
+
+        # Verify tree structure
+        parent_info = get_task_info(depth_ids[0])
+        child_info = get_task_info(depth_ids[1])
+        grandchild_info = get_task_info(depth_ids[2])
+        assert child_info.parent == parent_info.id
+        assert grandchild_info.parent == child_info.id
+
+    async def test_inline_node_exception_restores_parent(self) -> None:
+        """Exception in inline node still restores _task_id to parent."""
+        from aionode import _task_id
+
+        restored_id: list[int] = []
+
+        async def failing_child() -> None:
+            msg = "boom"
+            raise ValueError(msg)
+
+        async def parent() -> None:
+            parent_id = _task_id.get()
+            with pytest.raises(ValueError, match="boom"):
+                await node(failing_child)()
+            restored_id.append(_task_id.get())
+            assert restored_id[0] == parent_id
+
+        await asyncio.create_task(node(parent)())
+
+
+# ---------------------------------------------------------------------------
+# node() name parameter
+# ---------------------------------------------------------------------------
+
+
+class TestNodeName:
+    async def test_name_parameter_sets_task_name(self) -> None:
+        """node(fn, name='foo') sets the asyncio task name when task is new."""
+
+        async def coro() -> None:
+            task = _current_task()
+            assert task.get_name() == "custom_name"
+
+        await asyncio.create_task(node(coro, name="custom_name")())
+
+    async def test_name_default_from_func(self) -> None:
+        """node(fn) without name uses fn.__name__ as task name."""
+
+        async def my_special_func() -> None:
+            task = _current_task()
+            assert task.get_name() == "my_special_func"
+
+        await asyncio.create_task(node(my_special_func)())
+
+    async def test_name_parameter_sets_taskinfo_name(self) -> None:
+        """TaskInfo.name matches the provided name parameter."""
+        info_holder: list[TaskInfo] = []
+
+        async def coro() -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(node(coro, name="tracked_op")())
+        assert info_holder[0].name == "tracked_op"
+
+    async def test_inline_node_name(self) -> None:
+        """Inline node uses name parameter for TaskInfo, does not change task name."""
+
+        async def child() -> None:
+            pass
+
+        async def parent() -> None:
+            task_name_before = _current_task().get_name()
+            await node(child, name="inline_child")()
+            # Task name should not be changed by inline node
+            assert _current_task().get_name() == task_name_before
+            # But child TaskInfo should have the inline name
+            parent_info = current_task_info()
+            child_info = get_task_info(parent_info.subtasks[0])
+            assert child_info.name == "inline_child"
+
+        await asyncio.create_task(node(parent, name="the_parent")())

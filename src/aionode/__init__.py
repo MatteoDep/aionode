@@ -25,17 +25,38 @@ def resolve[T](awaitable: Awaitable[T]) -> T:
     return _Resolved(awaitable)  # type: ignore[return-value]
 
 
+def _get_callable_name(func: Callable) -> str:
+    """Derive a human-readable name from a callable."""
+    return getattr(func, "__name__", None) or getattr(func, "__qualname__", None) or type(func).__name__
+
+
+def _restore_parent_task_id(node_id: int) -> None:
+    """Restore _task_id to the parent after an inline node finishes."""
+    parent_id = _get_state().task_infos[node_id].parent
+    if parent_id is not None:
+        _task_id.set(parent_id)
+
+
 def node[**P, R](
     func: Callable[P, Coroutine[Any, Any, R]],
     /,
     wait_for: Sequence[Awaitable[Any]] | None = None,
     track: bool = True,
     auto_progress: bool = True,
+    name: str | None = None,
 ) -> Callable[P, Coroutine[Any, Any, R]]:
+    effective_name = name or _get_callable_name(func)
+
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        inline = False
         if track:
-            await _init_task_info(start=False, auto_progress=auto_progress)
+            state = _get_state()
+            task = _get_task()
+            inline = task in state.task_ids
+            if not inline:
+                task.set_name(effective_name)
+            await _init_task_info(start=False, auto_progress=auto_progress, name=effective_name, inline=inline)
             _start = _start_task
         else:
 
@@ -92,11 +113,17 @@ def node[**P, R](
             retval = await result if inspect.isawaitable(result) else result
         except BaseException as exc:
             if track:
-                _mark_done(_task_id.get(), exc, _get_state())
+                node_id = _task_id.get()
+                _mark_done(node_id, exc, _get_state())
+                if inline:
+                    _restore_parent_task_id(node_id)
             raise
         else:
             if track:
-                _mark_done(_task_id.get(), None, _get_state())
+                node_id = _task_id.get()
+                _mark_done(node_id, None, _get_state())
+                if inline:
+                    _restore_parent_task_id(node_id)
         return retval
 
     return wrapper
@@ -289,12 +316,17 @@ def _get_task() -> asyncio.Task:
     return task
 
 
-async def _init_task_info(start: bool = True, auto_progress: bool = True) -> None:
+async def _init_task_info(
+    start: bool = True,
+    auto_progress: bool = True,
+    name: str | None = None,
+    inline: bool = False,
+) -> None:
     state = _get_state()
     task = _get_task()
-    task_name = task.get_name()
-    if task in state.task_ids:
-        msg = f"Task {task_name} is already initialized"
+    effective_name = name or task.get_name()
+    if not inline and task in state.task_ids:
+        msg = f"Task {effective_name} is already initialized"
         raise RuntimeError(msg)
 
     task_id = state.allocate_id()
@@ -309,7 +341,7 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
 
     task_info = TaskInfo(
         id=task_id,
-        name=task_name,
+        name=effective_name,
         parent=parent_id,
         started_at=datetime.now() if start else None,
         _start_mono=time.monotonic() if start else None,
@@ -331,7 +363,8 @@ async def _init_task_info(start: bool = True, auto_progress: bool = True) -> Non
                 if parent_task_info.auto_progress:
                     total = parent_task_info.total or 0
                     parent_task_info.total = total + 1
-        state.task_ids[task] = task_id
+        if not inline:
+            state.task_ids[task] = task_id
         _task_id.set(task_id)
 
 
