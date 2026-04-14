@@ -186,9 +186,7 @@ def print_tree(root_id: int) -> None:
 def print_dag(root_id: int) -> None:
     for info in aionode.walk_dag(root_id):
         isolated = " (isolated)" if not info.deps and not info.dependents else ""
-        dep_names = ", ".join(
-            aionode.get_task_info(d).name for d in info.deps
-        )
+        dep_names = ", ".join(aionode.get_task_info(d).name for d in info.deps)
         deps_str = f"  <- {dep_names}" if dep_names else ""
         icon = _status_icon(info)
         print(f"  [{icon}] {info.name}{_progress(info)}{deps_str}{isolated}")

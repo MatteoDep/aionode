@@ -218,6 +218,7 @@ class TestTaskInfoUpdate:
 
         await asyncio.create_task(node(coro)())
 
+
 # ---------------------------------------------------------------------------
 # node — core tracking behaviour (replaces old TestTrack)
 # ---------------------------------------------------------------------------
@@ -416,7 +417,7 @@ class TestParentChild:
 
         child_info = get_task_info(child_ids[0])
         assert child_info.tree_depth == 2  # child is a subtask of parent (tree depth 1), so tree_depth=2
-        assert child_info.dag_depth == 0   # child has no dep edges
+        assert child_info.dag_depth == 0  # child has no dep edges
         assert child_info.deps == ()
 
 
@@ -767,7 +768,6 @@ class TestNode:
                 up = tg.create_task(node(upstream, name="up")())
                 tg.create_task(node(downstream, name="down")(resolve(up)))
 
-
         await asyncio.create_task(node(run)())
 
 
@@ -801,7 +801,6 @@ class TestDepEdges:
                     downstream_ids.append(down_id)
 
                 tg.create_task(capture(), name="capture")
-
 
         await asyncio.create_task(node(run)())
 
@@ -918,9 +917,7 @@ class TestNodeOptions:
             assert info.total is None
 
         async def run() -> None:
-            child_task = asyncio.create_task(
-                node(child_fn, auto_progress=False, name="no-progress-child")()
-            )
+            child_task = asyncio.create_task(node(child_fn, auto_progress=False, name="no-progress-child")())
             await child_task
 
         await asyncio.create_task(node(run)())

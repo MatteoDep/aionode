@@ -38,9 +38,7 @@ def _restore_parent_task_id(node_id: int) -> None:
 
 
 class _NodeDecorator(Protocol):
-    def __call__[**P, R](
-        self, func: Callable[P, Coroutine[Any, Any, R]], /
-    ) -> Callable[P, Coroutine[Any, Any, R]]: ...
+    def __call__[**P, R](self, func: Callable[P, Coroutine[Any, Any, R]], /) -> Callable[P, Coroutine[Any, Any, R]]: ...
 
 
 @overload
@@ -349,9 +347,7 @@ def _mark_done(task_id: int, exc: BaseException | None, state: _LoopState) -> No
             if task_info.auto_progress:
                 parent_info.completed = (parent_info.completed or 0) + 1
             if task_id in parent_info.running_subtasks:
-                parent_info.running_subtasks = tuple(
-                    tid for tid in parent_info.running_subtasks if tid != task_id
-                )
+                parent_info.running_subtasks = tuple(tid for tid in parent_info.running_subtasks if tid != task_id)
 
 
 def _get_task() -> asyncio.Task:
@@ -521,7 +517,6 @@ def get_task_info(task_id: int) -> TaskInfo:
     except KeyError:
         msg = f"No task with id {task_id!r} found in the current event loop."
         raise ValueError(msg) from None
-
 
 
 def remove_task(task_id: int) -> None:
