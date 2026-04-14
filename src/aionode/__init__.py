@@ -58,7 +58,7 @@ def node[**P, R](
             bound = _sig.bind(*args, **kwargs)
             bound.apply_defaults()
             return name.format(*args, **bound.arguments)  # type: ignore[union-attr]
-        if name is not None:
+        if isinstance(name, str):
             return name
         return _fallback_name
 
