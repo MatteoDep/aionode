@@ -1440,3 +1440,48 @@ class TestNodeName:
             assert child_info.name == "child_7"
 
         await asyncio.create_task(node(parent, name="the_parent")())
+
+
+class TestNodeDecorator:
+    async def test_bare_decorator(self) -> None:
+        """@node as bare decorator tracks the function."""
+
+        @node
+        async def my_task() -> int:
+            return 42
+
+        result = await asyncio.create_task(my_task())
+        assert result == 42
+
+    async def test_decorator_with_name(self) -> None:
+        """@node(name='custom') sets TaskInfo.name."""
+        info_holder: list[TaskInfo] = []
+
+        @node(name="custom_op")
+        async def my_task() -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(my_task())
+        assert info_holder[0].name == "custom_op"
+
+    async def test_decorator_with_format_name(self) -> None:
+        """@node(name='op_{x}') resolves parameterized name."""
+        info_holder: list[TaskInfo] = []
+
+        @node(name="op_{x}")
+        async def my_task(x: int) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(my_task(7))
+        assert info_holder[0].name == "op_7"
+
+    async def test_decorator_with_callable_name(self) -> None:
+        """@node(name=callable) resolves name from args."""
+        info_holder: list[TaskInfo] = []
+
+        @node(name=lambda x: f"task_{x}")
+        async def my_task(x: int) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(my_task(5))
+        assert info_holder[0].name == "task_5"

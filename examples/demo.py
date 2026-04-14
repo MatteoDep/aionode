@@ -6,6 +6,8 @@ Features showcased:
   - wait_for=         declare a side-effect dependency without receiving its result
   - TaskInfo.update() report per-chunk progress from inside a coroutine
   - make_async()      wrap a sync function so it can be tracked
+  - @node(name=)      decorator with parameterized name via format string
+  - inline nodes      await node(fn)() inside a node — tracked child span, no new Task
   - subtasks          enrich() fans out into per-chunk node() subtasks
   - walk_tree()       DFS pre-order traversal (tree view)
   - walk_dag()        topological order traversal (DAG view)
@@ -15,6 +17,7 @@ DAG shape:
     fetch_data (1s)
          │
          ├──► validate (0.5s)
+         │       ╰─ deduplicate (0.2s, inline)
          │         │
          │         └──► process (1.5s, manual progress) ──► load (0.8s)
          │                                                        │
@@ -37,14 +40,26 @@ async def fetch_data() -> list[int]:
     return list(range(100))
 
 
+async def deduplicate(data: list[int]) -> list[int]:
+    """Inline node — called with await node()() inside validate, no new Task."""
+    await asyncio.sleep(0.2)
+    unique = list(dict.fromkeys(data))
+    await aionode.log(f"deduplication removed {len(data) - len(unique)} records")
+    return unique
+
+
 async def validate(data: list[int]) -> list[int]:
     await asyncio.sleep(0.5)
     valid = [x for x in data if x % 2 == 0]
     await aionode.log(f"kept {len(valid)} valid records")
+    # inline node: runs inside validate's Task, tracked as a child span
+    valid = await aionode.node(deduplicate)(valid)
     return valid
 
 
-async def _enrich_chunk(chunk: list[int]) -> list[int]:
+@aionode.node(name="enrich-chunk-{chunk_id}")
+async def _enrich_chunk(chunk: list[int], chunk_id: int) -> list[int]:
+    """@node decorator with parameterized name — resolves from args at call time."""
     await asyncio.sleep(0.5)
     return [x * 10 for x in chunk]
 
@@ -54,8 +69,7 @@ async def enrich(data: list[int]) -> list[int]:
     async with asyncio.TaskGroup() as tg:
         subtasks = [
             tg.create_task(
-                aionode.node(_enrich_chunk)(chunk),
-                name=f"enrich-chunk-{i}",
+                _enrich_chunk(chunk, chunk_id=i),
             )
             for i, chunk in enumerate(chunks)
         ]

@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, overload, runtime_checkable
 
 __version__ = importlib.metadata.version("aionode")
 
@@ -37,112 +37,146 @@ def _restore_parent_task_id(node_id: int) -> None:
         _task_id.set(parent_id)
 
 
+class _NodeDecorator(Protocol):
+    def __call__[**P, R](
+        self, func: Callable[P, Coroutine[Any, Any, R]], /
+    ) -> Callable[P, Coroutine[Any, Any, R]]: ...
+
+
+@overload
 def node[**P, R](
     func: Callable[P, Coroutine[Any, Any, R]],
     /,
+    *,
     wait_for: Sequence[Awaitable[Any]] | None = None,
     track: bool = True,
     auto_progress: bool = True,
     name: str | Callable[..., str] | None = None,
-) -> Callable[P, Coroutine[Any, Any, R]]:
-    _fallback_name = _get_callable_name(func)
-    _name_is_callable = callable(name)
-    _name_is_template = isinstance(name, str) and "{" in name
-    if _name_is_template:
-        _sig = inspect.signature(func)
+) -> Callable[P, Coroutine[Any, Any, R]]: ...
 
-    def _resolve_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-        if _name_is_callable:
-            return name(*args, **kwargs)  # type: ignore[operator]
+
+@overload
+def node(
+    *,
+    wait_for: Sequence[Awaitable[Any]] | None = None,
+    track: bool = True,
+    auto_progress: bool = True,
+    name: str | Callable[..., str] | None = None,
+) -> _NodeDecorator: ...
+
+
+def node(
+    func: Callable[..., Coroutine[Any, Any, Any]] | None = None,
+    /,
+    *,
+    wait_for: Sequence[Awaitable[Any]] | None = None,
+    track: bool = True,
+    auto_progress: bool = True,
+    name: str | Callable[..., str] | None = None,
+) -> Any:
+    def decorator(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
+        _fallback_name = _get_callable_name(func)
+        _name_is_callable = callable(name)
+        _name_is_template = isinstance(name, str) and "{" in name
         if _name_is_template:
-            bound = _sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-            return name.format(*args, **bound.arguments)  # type: ignore[union-attr]
-        if isinstance(name, str):
-            return name
-        return _fallback_name
+            _sig = inspect.signature(func)
 
-    @functools.wraps(func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        inline = False
-        effective_name = _resolve_name(args, kwargs) if track else _fallback_name
-        if track:
-            state = _get_state()
-            task = _get_task()
-            inline = task in state.task_ids
-            if not inline:
-                task.set_name(effective_name)
-            await _init_task_info(start=False, auto_progress=auto_progress, name=effective_name, inline=inline)
-            _start = _start_task
-        else:
+        def _resolve_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+            if _name_is_callable:
+                return name(*args, **kwargs)  # type: ignore[operator]
+            if _name_is_template:
+                bound = _sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+                return name.format(*args, **bound.arguments)  # type: ignore[union-attr]
+            if isinstance(name, str):
+                return name
+            return _fallback_name
 
-            async def _start() -> None:
-                pass
-
-        # Identify _Resolved positions
-        resolved_arg_idxs = [(i, a) for i, a in enumerate(args) if isinstance(a, _Resolved)]
-        resolved_kwarg_keys = [(k, v) for k, v in kwargs.items() if isinstance(v, _Resolved)]
-        all_awaitables = (
-            [a.awaitable for _, a in resolved_arg_idxs]
-            + [v.awaitable for _, v in resolved_kwarg_keys]
-            + list(wait_for or [])
-        )
-
-        if track:
-            state = _get_state()
-            our_id = _task_id.get()
-            dep_tasks: list[asyncio.Task] = (
-                [a.awaitable for _, a in resolved_arg_idxs if isinstance(a.awaitable, asyncio.Task)]
-                + [v.awaitable for _, v in resolved_kwarg_keys if isinstance(v.awaitable, asyncio.Task)]
-                + [d for d in (wait_for or []) if isinstance(d, asyncio.Task)]
-            )
-            for dep_task in dep_tasks:
-                if dep_task in state.task_ids:
-                    await _register_dep(our_id, state.task_ids[dep_task])
-
-        try:
-            if all_awaitables:
-                results = await asyncio.gather(*all_awaitables)
-                n_args = len(resolved_arg_idxs)
-                n_kw = len(resolved_kwarg_keys)
-                arg_results = list(results[:n_args])
-                kwarg_results = list(results[n_args : n_args + n_kw])
-                # results[n_args + n_kw:] are wait_for results — discarded
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            inline = False
+            effective_name = _resolve_name(args, kwargs) if track else _fallback_name
+            if track:
+                state = _get_state()
+                task = _get_task()
+                inline = task in state.task_ids
+                if not inline:
+                    task.set_name(effective_name)
+                await _init_task_info(start=False, auto_progress=auto_progress, name=effective_name, inline=inline)
+                _start = _start_task
             else:
-                arg_results, kwarg_results = [], []
-        except Exception as e:
-            msg = "Failed while waiting to start."
-            raise RuntimeError(msg) from e
 
-        # Rebuild args/kwargs with resolved values
-        resolved_args = list(args)
-        for (i, _), val in zip(resolved_arg_idxs, arg_results, strict=True):
-            resolved_args[i] = val
-        resolved_kwargs = dict(kwargs)
-        for (k, _), val in zip(resolved_kwarg_keys, kwarg_results, strict=True):
-            resolved_kwargs[k] = val
+                async def _start() -> None:
+                    pass
 
-        await _start()
+            # Identify _Resolved positions
+            resolved_arg_idxs = [(i, a) for i, a in enumerate(args) if isinstance(a, _Resolved)]
+            resolved_kwarg_keys = [(k, v) for k, v in kwargs.items() if isinstance(v, _Resolved)]
+            all_awaitables = (
+                [a.awaitable for _, a in resolved_arg_idxs]
+                + [v.awaitable for _, v in resolved_kwarg_keys]
+                + list(wait_for or [])
+            )
 
-        try:
-            result = func(*resolved_args, **resolved_kwargs)
-            retval = await result if inspect.isawaitable(result) else result
-        except BaseException as exc:
             if track:
-                node_id = _task_id.get()
-                _mark_done(node_id, exc, _get_state())
-                if inline:
-                    _restore_parent_task_id(node_id)
-            raise
-        else:
-            if track:
-                node_id = _task_id.get()
-                _mark_done(node_id, None, _get_state())
-                if inline:
-                    _restore_parent_task_id(node_id)
-        return retval
+                state = _get_state()
+                our_id = _task_id.get()
+                dep_tasks: list[asyncio.Task] = (
+                    [a.awaitable for _, a in resolved_arg_idxs if isinstance(a.awaitable, asyncio.Task)]
+                    + [v.awaitable for _, v in resolved_kwarg_keys if isinstance(v.awaitable, asyncio.Task)]
+                    + [d for d in (wait_for or []) if isinstance(d, asyncio.Task)]
+                )
+                for dep_task in dep_tasks:
+                    if dep_task in state.task_ids:
+                        await _register_dep(our_id, state.task_ids[dep_task])
 
-    return wrapper
+            try:
+                if all_awaitables:
+                    results = await asyncio.gather(*all_awaitables)
+                    n_args = len(resolved_arg_idxs)
+                    n_kw = len(resolved_kwarg_keys)
+                    arg_results = list(results[:n_args])
+                    kwarg_results = list(results[n_args : n_args + n_kw])
+                    # results[n_args + n_kw:] are wait_for results — discarded
+                else:
+                    arg_results, kwarg_results = [], []
+            except Exception as e:
+                msg = "Failed while waiting to start."
+                raise RuntimeError(msg) from e
+
+            # Rebuild args/kwargs with resolved values
+            resolved_args = list(args)
+            for (i, _), val in zip(resolved_arg_idxs, arg_results, strict=True):
+                resolved_args[i] = val
+            resolved_kwargs = dict(kwargs)
+            for (k, _), val in zip(resolved_kwarg_keys, kwarg_results, strict=True):
+                resolved_kwargs[k] = val
+
+            await _start()
+
+            try:
+                result = func(*resolved_args, **resolved_kwargs)
+                retval = await result if inspect.isawaitable(result) else result
+            except BaseException as exc:
+                if track:
+                    node_id = _task_id.get()
+                    _mark_done(node_id, exc, _get_state())
+                    if inline:
+                        _restore_parent_task_id(node_id)
+                raise
+            else:
+                if track:
+                    node_id = _task_id.get()
+                    _mark_done(node_id, None, _get_state())
+                    if inline:
+                        _restore_parent_task_id(node_id)
+            return retval
+
+        return wrapper
+
+    if func is not None:
+        return decorator(func)
+    return decorator
 
 
 class _Unset:
