@@ -43,13 +43,29 @@ def node[**P, R](
     wait_for: Sequence[Awaitable[Any]] | None = None,
     track: bool = True,
     auto_progress: bool = True,
-    name: str | None = None,
+    name: str | Callable[..., str] | None = None,
 ) -> Callable[P, Coroutine[Any, Any, R]]:
-    effective_name = name or _get_callable_name(func)
+    _fallback_name = _get_callable_name(func)
+    _name_is_callable = callable(name)
+    _name_is_template = isinstance(name, str) and "{" in name
+    if _name_is_template:
+        _sig = inspect.signature(func)
+
+    def _resolve_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+        if _name_is_callable:
+            return name(*args, **kwargs)  # type: ignore[operator]
+        if _name_is_template:
+            bound = _sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            return name.format(*args, **bound.arguments)  # type: ignore[union-attr]
+        if name is not None:
+            return name
+        return _fallback_name
 
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         inline = False
+        effective_name = _resolve_name(args, kwargs) if track else _fallback_name
         if track:
             state = _get_state()
             task = _get_task()

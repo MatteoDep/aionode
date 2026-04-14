@@ -1386,3 +1386,57 @@ class TestNodeName:
             assert child_info.name == "inline_child"
 
         await asyncio.create_task(node(parent, name="the_parent")())
+
+    async def test_name_callable_with_args(self) -> None:
+        """name=callable receives the wrapped function's args."""
+        info_holder: list[TaskInfo] = []
+
+        async def coro(x: int, y: str) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(node(coro, name=lambda x, y: f"op_{x}_{y}")(3, "foo"))
+        assert info_holder[0].name == "op_3_foo"
+
+    async def test_name_format_string_positional(self) -> None:
+        """name with {0} placeholder uses positional args."""
+        info_holder: list[TaskInfo] = []
+
+        async def coro(x: int) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(node(coro, name="op_{0}")(42))
+        assert info_holder[0].name == "op_42"
+
+    async def test_name_format_string_keyword(self) -> None:
+        """name with {kw} placeholder uses keyword args."""
+        info_holder: list[TaskInfo] = []
+
+        async def coro(url: str) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(node(coro, name="fetch_{url}")(url="example.com"))
+        assert info_holder[0].name == "fetch_example.com"
+
+    async def test_name_format_named_param_passed_positionally(self) -> None:
+        """name with {param_name} works even when param is passed positionally."""
+        info_holder: list[TaskInfo] = []
+
+        async def coro(url: str, retries: int = 3) -> None:
+            info_holder.append(current_task_info())
+
+        await asyncio.create_task(node(coro, name="fetch_{url}_r{retries}")("example.com"))
+        assert info_holder[0].name == "fetch_example.com_r3"
+
+    async def test_name_callable_inline(self) -> None:
+        """Parameterized name works on inline nodes."""
+
+        async def child(x: int) -> None:
+            pass
+
+        async def parent() -> None:
+            await node(child, name=lambda x: f"child_{x}")(7)
+            parent_info = current_task_info()
+            child_info = get_task_info(parent_info.subtasks[0])
+            assert child_info.name == "child_7"
+
+        await asyncio.create_task(node(parent, name="the_parent")())
