@@ -22,7 +22,7 @@ class _Resolved[T]:
 
 
 def resolve[T](awaitable: Awaitable[T]) -> T:
-    return _Resolved(awaitable)  # type: ignore[return-value]
+    return cast("T", _Resolved(awaitable))
 
 
 def _get_callable_name(func: Callable) -> str:
@@ -74,18 +74,15 @@ def node(
 ) -> Any:
     def decorator(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
         _fallback_name = _get_callable_name(func)
-        _name_is_callable = callable(name)
-        _name_is_template = isinstance(name, str) and "{" in name
-        if _name_is_template:
-            _sig = inspect.signature(func)
+        _sig = inspect.signature(func)
 
         def _resolve_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-            if _name_is_callable:
-                return name(*args, **kwargs)  # type: ignore[operator]
-            if _name_is_template:
+            if callable(name) and not isinstance(name, str):
+                return name(*args, **kwargs)
+            if isinstance(name, str) and "{" in name:
                 bound = _sig.bind(*args, **kwargs)
                 bound.apply_defaults()
-                return name.format(*args, **bound.arguments)  # type: ignore[union-attr]
+                return name.format(*args, **bound.arguments)
             if isinstance(name, str):
                 return name
             return _fallback_name
