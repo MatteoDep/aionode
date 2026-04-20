@@ -81,6 +81,38 @@ for info in aionode.walk_dag():
 
 Both accept an optional `root` argument (an `asyncio.Task` or task id). Passing `None` (the default) includes all tasks in the current event loop.
 
+### `sync_node(name, auto_progress=True)`
+
+Track sync code blocks as child nodes in the task tree — without spawning extra threads. Use inside functions running in a `make_async` thread.
+
+```python
+@aionode.make_async
+def compute_pipeline(state):
+    with aionode.sync_node("extract"):
+        extract(state)
+    with aionode.sync_node("transform"):
+        transform(state)
+    with aionode.sync_node("load"):
+        load(state)
+
+# Each block appears as a named child in walk_tree() with its own timing.
+```
+
+`sync_node` can also be used directly inside async `node`-wrapped code for lightweight sync blocks. Be aware that the wrapped code runs on the event loop thread and blocks other coroutines — keep it short, or use `make_async` to offload to a thread.
+
+Also works as a decorator:
+
+```python
+@aionode.sync_node
+def extract(state):
+    ...
+
+# Or with a custom/parameterized name:
+@aionode.sync_node(name="compute_{table}")
+def process(table: str, state):
+    ...
+```
+
 ### Task Inspection
 
 ```python
@@ -111,6 +143,7 @@ info = aionode.current_task_info()
 | `current_task_info()` | Get TaskInfo for the currently running tracked task |
 | `remove_task(task_id)` | Remove a task and its descendants |
 | `log(value, end)` | Append to the current task's logs |
+| `sync_node(name, auto_progress)` | Track a sync block or function as a child node |
 | `make_async(func)` | Run a sync function in a thread |
 | `make_async_generator(gen)` | Async iterate a sync iterator via threads |
 | `walk_tree(root)` | DFS pre-order through the call tree |
