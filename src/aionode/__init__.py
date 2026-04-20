@@ -216,29 +216,31 @@ class TaskInfo:
     _start_mono: float | None = field(default=None, repr=False, compare=False)
     _finish_mono: float | None = field(default=None, repr=False, compare=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    _thread_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     _edit_allowed: bool = field(default=False, repr=False, compare=False)
 
     def __setattr__(self, name: str, value: Any, /) -> None:
-        if name in ("_edit_allowed", "_lock", "_start_mono", "_finish_mono"):
+        if name in ("_edit_allowed", "_lock", "_thread_lock", "_start_mono", "_finish_mono"):
             object.__setattr__(self, name, value)
             return
 
         if hasattr(self, "_edit_allowed") and not object.__getattribute__(self, "_edit_allowed"):
-            msg = "Edit not allowed. Use the `allow_edit` context manager."
+            msg = "Edit not allowed. Use the `edit` context manager."
             raise RuntimeError(msg)
 
         object.__setattr__(self, name, value)
 
     @contextmanager
-    def edit(self) -> Iterator[None]:
-        self._edit_allowed = True
-        try:
-            yield
-        finally:
-            self._edit_allowed = False
+    def sync_edit(self) -> Iterator[None]:
+        with self._thread_lock:
+            self._edit_allowed = True
+            try:
+                yield
+            finally:
+                self._edit_allowed = False
 
     @asynccontextmanager
-    async def allow_edit(self) -> AsyncGenerator[None]:
+    async def edit(self) -> AsyncGenerator[None]:
         async with self._lock:
             self._edit_allowed = True
             try:
@@ -253,7 +255,7 @@ class TaskInfo:
         total: float | None | _Unset = _UNSET,
     ) -> None:
         """Update user-facing fields atomically."""
-        async with self.allow_edit():
+        async with self.edit():
             if not isinstance(completed, _Unset):
                 self.completed = completed
             if not isinstance(total, _Unset):
@@ -332,7 +334,7 @@ def _mark_done(task_id: int, exc: BaseException | None, state: _LoopState) -> No
     concurrency can interleave here — bypassing the async lock is safe.
     """
     task_info = state.task_infos[task_id]
-    with task_info.edit():
+    with task_info.sync_edit():
         task_info._finish_mono = time.monotonic()
         task_info.finished_at = datetime.now()
         if isinstance(exc, asyncio.CancelledError):
@@ -348,7 +350,7 @@ def _mark_done(task_id: int, exc: BaseException | None, state: _LoopState) -> No
 
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
-        with parent_info.edit():
+        with parent_info.sync_edit():
             if task_info.auto_progress:
                 parent_info.completed = (parent_info.completed or 0) + 1
             if task_id in parent_info.running_subtasks:
@@ -403,11 +405,11 @@ async def _init_task_info(
         dag_depth=0,
     )
 
-    async with task_info.allow_edit():
+    async with task_info.edit():
         state.task_infos[task_id] = task_info
         if parent_id is not None:
             parent_task_info = state.task_infos[parent_id]
-            async with parent_task_info.allow_edit():
+            async with parent_task_info.edit():
                 parent_task_info.subtasks = (*parent_task_info.subtasks, task_id)
                 if start:
                     parent_task_info.running_subtasks = (*parent_task_info.running_subtasks, task_id)
@@ -428,13 +430,13 @@ async def _start_task() -> None:
         raise RuntimeError(msg)
     task_id = _task_id.get()
     task_info = state.task_infos[task_id]
-    async with task_info.allow_edit():
+    async with task_info.edit():
         task_info._start_mono = time.monotonic()
         task_info.started_at = datetime.now()
         task_info.status = TaskStatus.RUNNING
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
-        async with parent_info.allow_edit():
+        async with parent_info.edit():
             parent_info.running_subtasks = (*parent_info.running_subtasks, task_id)
 
 
@@ -470,13 +472,13 @@ async def _register_dep(from_id: int, to_id: int) -> None:
         to_desc = to_info.name
         msg = f"Circular dependency detected: {from_desc!r} -> {to_desc!r} would create a cycle."
         raise RuntimeError(msg)
-    async with from_info.allow_edit():
+    async with from_info.edit():
         if to_id not in from_info.deps:
             from_info.deps = (*from_info.deps, to_id)
         new_dag_depth = to_info.dag_depth + 1
         if new_dag_depth > from_info.dag_depth:
             from_info.dag_depth = new_dag_depth
-    async with to_info.allow_edit():
+    async with to_info.edit():
         if from_id not in to_info.dependents:
             to_info.dependents = (*to_info.dependents, from_id)
 
@@ -489,7 +491,7 @@ async def log(value: str = "", end: str = "\n") -> None:
         return
     state = _get_state()
     task_info = state.task_infos[task_id]
-    async with task_info.allow_edit():
+    async with task_info.edit():
         task_info.logs += value + end
 
 
@@ -586,7 +588,7 @@ class _SyncNodeContext:
         )
 
         state.task_infos[task_id] = task_info
-        with parent_info.edit():
+        with parent_info.sync_edit():
             parent_info.subtasks = (*parent_info.subtasks, task_id)
             parent_info.running_subtasks = (*parent_info.running_subtasks, task_id)
             if parent_info.auto_progress:

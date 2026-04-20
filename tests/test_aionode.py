@@ -42,23 +42,23 @@ def _current_task() -> asyncio.Task[Any]:
 
 class TestTaskInfoImmutability:
     async def test_direct_edit_raises(self) -> None:
-        """Writing to TaskInfo fields without allow_edit must raise."""
+        """Writing to TaskInfo fields without edit must raise."""
 
         async def coro() -> None:
             task_id = await get_task_id(_current_task())
             info = get_task_info(task_id)
-            with pytest.raises(RuntimeError, match="allow_edit"):
+            with pytest.raises(RuntimeError, match="edit"):
                 info.name = "new name"
 
         await asyncio.create_task(node(coro)())
 
-    async def test_allow_edit_permits_write(self) -> None:
-        """allow_edit context manager must permit field updates."""
+    async def test_edit_permits_write(self) -> None:
+        """edit context manager must permit field updates."""
 
         async def coro() -> None:
             task_id = await get_task_id(_current_task())
             info = get_task_info(task_id)
-            async with info.allow_edit():
+            async with info.edit():
                 info.name = "updated"
             assert info.name == "updated"
 
