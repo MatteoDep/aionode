@@ -17,6 +17,7 @@ from aionode import (
     node,
     remove_task,
     resolve,
+    sync_node,
     walk_dag,
     walk_tree,
 )
@@ -41,23 +42,23 @@ def _current_task() -> asyncio.Task[Any]:
 
 class TestTaskInfoImmutability:
     async def test_direct_edit_raises(self) -> None:
-        """Writing to TaskInfo fields without allow_edit must raise."""
+        """Writing to TaskInfo fields without edit must raise."""
 
         async def coro() -> None:
             task_id = await get_task_id(_current_task())
             info = get_task_info(task_id)
-            with pytest.raises(RuntimeError, match="allow_edit"):
+            with pytest.raises(RuntimeError, match="edit"):
                 info.name = "new name"
 
         await asyncio.create_task(node(coro)())
 
-    async def test_allow_edit_permits_write(self) -> None:
-        """allow_edit context manager must permit field updates."""
+    async def test_edit_permits_write(self) -> None:
+        """edit context manager must permit field updates."""
 
         async def coro() -> None:
             task_id = await get_task_id(_current_task())
             info = get_task_info(task_id)
-            async with info.allow_edit():
+            async with info.edit():
                 info.name = "updated"
             assert info.name == "updated"
 
@@ -1482,3 +1483,280 @@ class TestNodeDecorator:
 
         await asyncio.create_task(my_task(5))
         assert info_holder[0].name == "task_5"
+
+
+# ---------------------------------------------------------------------------
+# sync_node — context manager
+# ---------------------------------------------------------------------------
+
+
+class TestSyncNodeContextManager:
+    async def test_basic_tracking(self) -> None:
+        """sync_node context manager creates a tracked child with timing."""
+
+        def work() -> None:
+            with sync_node("step_a"):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            assert len(info.subtasks) == 1
+            child = get_task_info(info.subtasks[0])
+            assert child.name == "step_a"
+            assert child.status == TaskStatus.DONE
+            assert child.started_at is not None
+            assert child.finished_at is not None
+            assert child.duration() >= 0.0
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_multiple_sequential_steps(self) -> None:
+        """Multiple sync_node blocks create sibling children."""
+
+        def work() -> None:
+            with sync_node("step_1"):
+                pass
+            with sync_node("step_2"):
+                pass
+            with sync_node("step_3"):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            assert len(info.subtasks) == 3
+            names = [get_task_info(tid).name for tid in info.subtasks]
+            assert names == ["step_1", "step_2", "step_3"]
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_nested_sync_nodes(self) -> None:
+        """Nested sync_node blocks form correct parent-child tree."""
+
+        def work() -> None:
+            with sync_node("outer") as outer_info:
+                with sync_node("inner"):
+                    pass
+                assert len(outer_info.subtasks) == 1
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            outer = get_task_info(info.subtasks[0])
+            assert outer.name == "outer"
+            inner = get_task_info(outer.subtasks[0])
+            assert inner.name == "inner"
+            assert inner.parent == outer.id
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_exception_marks_failed(self) -> None:
+        """Exception in sync_node marks the node as FAILED."""
+
+        def work() -> None:
+            try:
+                with sync_node("failing"):
+                    msg = "boom"
+                    raise ValueError(msg)
+            except ValueError:
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            child = get_task_info(info.subtasks[0])
+            assert child.status == TaskStatus.FAILED
+            assert isinstance(child.exception, ValueError)
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_exception_restores_parent_id(self) -> None:
+        """After exception, subsequent sync_node gets correct parent."""
+        from aionode import _task_id
+
+        def work() -> None:
+            parent_id = _task_id.get()
+            try:
+                with sync_node("failing"):
+                    msg = "boom"
+                    raise ValueError(msg)
+            except ValueError:
+                pass
+            assert _task_id.get() == parent_id
+            with sync_node("recovery"):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            assert len(info.subtasks) == 2
+            assert get_task_info(info.subtasks[1]).name == "recovery"
+            assert get_task_info(info.subtasks[1]).status == TaskStatus.DONE
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_auto_progress(self) -> None:
+        """sync_node updates parent total/completed via auto_progress."""
+
+        def work() -> None:
+            with sync_node("step"):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            assert info.total == 1
+            assert info.completed == 1
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_auto_progress_false(self) -> None:
+        """sync_node(auto_progress=False) does not update parent counters."""
+
+        def work() -> None:
+            with sync_node("step", auto_progress=False):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            # auto_progress of the parent node is True, but the child has auto_progress=False
+            # so the parent's total/completed should not be incremented by this child
+            assert info.total is None
+
+        await asyncio.create_task(node(parent, auto_progress=False)())
+
+    async def test_walk_tree_includes_sync_nodes(self) -> None:
+        """sync_node entries appear in walk_tree output."""
+
+        def work() -> None:
+            with sync_node("compute_a"):
+                pass
+            with sync_node("compute_b"):
+                pass
+
+        async def parent() -> None:
+            await make_async(work)()
+
+        task = asyncio.create_task(node(parent, name="root")())
+        root_id = await get_task_id(task)
+        await task
+
+        names = [info.name for info in walk_tree(root_id)]
+        assert "root" in names
+        assert "compute_a" in names
+        assert "compute_b" in names
+        assert names.index("root") < names.index("compute_a")
+        assert names.index("compute_a") < names.index("compute_b")
+
+    async def test_outside_aionode_context_raises(self) -> None:
+        """sync_node outside any aionode context raises RuntimeError."""
+        with pytest.raises(RuntimeError, match="active aionode context"):
+            with sync_node("bad"):
+                pass
+
+    async def test_returns_task_info(self) -> None:
+        """sync_node __enter__ returns the TaskInfo for the new node."""
+
+        def work() -> None:
+            with sync_node("step") as info:
+                assert isinstance(info, TaskInfo)
+                assert info.name == "step"
+                assert info.status == TaskStatus.RUNNING
+
+        async def parent() -> None:
+            await make_async(work)()
+
+        await asyncio.create_task(node(parent)())
+
+
+# ---------------------------------------------------------------------------
+# sync_node — decorator
+# ---------------------------------------------------------------------------
+
+
+class TestSyncNodeDecorator:
+    async def test_bare_decorator(self) -> None:
+        """@sync_node tracks using function __name__."""
+
+        @sync_node
+        def my_step() -> int:
+            return 42
+
+        def work() -> int:
+            return my_step()
+
+        async def parent() -> None:
+            result = await make_async(work)()
+            assert result == 42
+            info = current_task_info()
+            child = get_task_info(info.subtasks[0])
+            assert child.name == "my_step"
+            assert child.status == TaskStatus.DONE
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_decorator_with_name(self) -> None:
+        """@sync_node(name='custom') uses custom name."""
+
+        @sync_node(name="custom_op")
+        def my_step() -> None:
+            pass
+
+        def work() -> None:
+            my_step()
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            child = get_task_info(info.subtasks[0])
+            assert child.name == "custom_op"
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_decorator_with_format_name(self) -> None:
+        """@sync_node(name='op_{x}') resolves parameterized name."""
+
+        @sync_node(name="compute_{table}")
+        def process(table: str) -> None:
+            pass
+
+        def work() -> None:
+            process("mudlog")
+            process("triprun")
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            names = [get_task_info(tid).name for tid in info.subtasks]
+            assert names == ["compute_mudlog", "compute_triprun"]
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_decorator_with_callable_name(self) -> None:
+        """@sync_node(name=callable) resolves name from args."""
+
+        @sync_node(name=lambda x: f"step_{x}")
+        def my_step(x: int) -> None:
+            pass
+
+        def work() -> None:
+            my_step(7)
+
+        async def parent() -> None:
+            await make_async(work)()
+            info = current_task_info()
+            child = get_task_info(info.subtasks[0])
+            assert child.name == "step_7"
+
+        await asyncio.create_task(node(parent)())
+
+    async def test_decorator_preserves_function_name(self) -> None:
+        """sync_node decorator preserves __name__ via functools.wraps."""
+
+        @sync_node
+        def my_func() -> None:
+            pass
+
+        assert my_func.__name__ == "my_func"

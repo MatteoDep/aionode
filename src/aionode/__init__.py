@@ -216,29 +216,31 @@ class TaskInfo:
     _start_mono: float | None = field(default=None, repr=False, compare=False)
     _finish_mono: float | None = field(default=None, repr=False, compare=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    _thread_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     _edit_allowed: bool = field(default=False, repr=False, compare=False)
 
     def __setattr__(self, name: str, value: Any, /) -> None:
-        if name in ("_edit_allowed", "_lock", "_start_mono", "_finish_mono"):
+        if name in ("_edit_allowed", "_lock", "_thread_lock", "_start_mono", "_finish_mono"):
             object.__setattr__(self, name, value)
             return
 
         if hasattr(self, "_edit_allowed") and not object.__getattribute__(self, "_edit_allowed"):
-            msg = "Edit not allowed. Use the `allow_edit` context manager."
+            msg = "Edit not allowed. Use the `edit` context manager."
             raise RuntimeError(msg)
 
         object.__setattr__(self, name, value)
 
     @contextmanager
-    def edit(self) -> Iterator[None]:
-        self._edit_allowed = True
-        try:
-            yield
-        finally:
-            self._edit_allowed = False
+    def sync_edit(self) -> Iterator[None]:
+        with self._thread_lock:
+            self._edit_allowed = True
+            try:
+                yield
+            finally:
+                self._edit_allowed = False
 
     @asynccontextmanager
-    async def allow_edit(self) -> AsyncGenerator[None]:
+    async def edit(self) -> AsyncGenerator[None]:
         async with self._lock:
             self._edit_allowed = True
             try:
@@ -253,7 +255,7 @@ class TaskInfo:
         total: float | None | _Unset = _UNSET,
     ) -> None:
         """Update user-facing fields atomically."""
-        async with self.allow_edit():
+        async with self.edit():
             if not isinstance(completed, _Unset):
                 self.completed = completed
             if not isinstance(total, _Unset):
@@ -288,6 +290,8 @@ class TaskInfo:
 
 
 _task_id: ContextVar[int] = ContextVar("task_id")
+_loop_state: ContextVar["_LoopState"] = ContextVar("loop_state")
+_async_task: ContextVar[asyncio.Task] = ContextVar("async_task")
 
 
 @dataclass
@@ -307,13 +311,19 @@ class _LoopState:
 _loop_states: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopState] = weakref.WeakKeyDictionary()
 
 
-def _get_state() -> _LoopState:
-    loop = asyncio.get_running_loop()
+def _get_state(*, create: bool = True) -> _LoopState:
     try:
-        return _loop_states[loop]
-    except KeyError:
-        state = _LoopState()
-        _loop_states[loop] = state
+        return _loop_state.get()
+    except LookupError:
+        loop = asyncio.get_running_loop()
+        try:
+            state = _loop_states[loop]
+        except KeyError:
+            if not create:
+                raise
+            state = _LoopState()
+            _loop_states[loop] = state
+        _loop_state.set(state)
         return state
 
 
@@ -324,7 +334,7 @@ def _mark_done(task_id: int, exc: BaseException | None, state: _LoopState) -> No
     concurrency can interleave here — bypassing the async lock is safe.
     """
     task_info = state.task_infos[task_id]
-    with task_info.edit():
+    with task_info.sync_edit():
         task_info._finish_mono = time.monotonic()
         task_info.finished_at = datetime.now()
         if isinstance(exc, asyncio.CancelledError):
@@ -340,7 +350,7 @@ def _mark_done(task_id: int, exc: BaseException | None, state: _LoopState) -> No
 
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
-        with parent_info.edit():
+        with parent_info.sync_edit():
             if task_info.auto_progress:
                 parent_info.completed = (parent_info.completed or 0) + 1
             if task_id in parent_info.running_subtasks:
@@ -395,11 +405,11 @@ async def _init_task_info(
         dag_depth=0,
     )
 
-    async with task_info.allow_edit():
+    async with task_info.edit():
         state.task_infos[task_id] = task_info
         if parent_id is not None:
             parent_task_info = state.task_infos[parent_id]
-            async with parent_task_info.allow_edit():
+            async with parent_task_info.edit():
                 parent_task_info.subtasks = (*parent_task_info.subtasks, task_id)
                 if start:
                     parent_task_info.running_subtasks = (*parent_task_info.running_subtasks, task_id)
@@ -408,6 +418,7 @@ async def _init_task_info(
                     parent_task_info.total = total + 1
         if not inline:
             state.task_ids[task] = task_id
+        _async_task.set(task)
         _task_id.set(task_id)
 
 
@@ -419,13 +430,13 @@ async def _start_task() -> None:
         raise RuntimeError(msg)
     task_id = _task_id.get()
     task_info = state.task_infos[task_id]
-    async with task_info.allow_edit():
+    async with task_info.edit():
         task_info._start_mono = time.monotonic()
         task_info.started_at = datetime.now()
         task_info.status = TaskStatus.RUNNING
     if task_info.parent is not None:
         parent_info = state.task_infos[task_info.parent]
-        async with parent_info.allow_edit():
+        async with parent_info.edit():
             parent_info.running_subtasks = (*parent_info.running_subtasks, task_id)
 
 
@@ -461,13 +472,13 @@ async def _register_dep(from_id: int, to_id: int) -> None:
         to_desc = to_info.name
         msg = f"Circular dependency detected: {from_desc!r} -> {to_desc!r} would create a cycle."
         raise RuntimeError(msg)
-    async with from_info.allow_edit():
+    async with from_info.edit():
         if to_id not in from_info.deps:
             from_info.deps = (*from_info.deps, to_id)
         new_dag_depth = to_info.dag_depth + 1
         if new_dag_depth > from_info.dag_depth:
             from_info.dag_depth = new_dag_depth
-    async with to_info.allow_edit():
+    async with to_info.edit():
         if from_id not in to_info.dependents:
             to_info.dependents = (*to_info.dependents, from_id)
 
@@ -480,7 +491,7 @@ async def log(value: str = "", end: str = "\n") -> None:
         return
     state = _get_state()
     task_info = state.task_infos[task_id]
-    async with task_info.allow_edit():
+    async with task_info.edit():
         task_info.logs += value + end
 
 
@@ -508,9 +519,9 @@ def current_task_info() -> TaskInfo:
 
 def get_task_info(task_id: int) -> TaskInfo:
     """Get the task info from a task_id."""
-    loop = asyncio.get_running_loop()
+    state = _get_state()
     try:
-        return _loop_states[loop].task_infos[task_id]
+        return state.task_infos[task_id]
     except KeyError:
         msg = f"No task with id {task_id!r} found in the current event loop."
         raise ValueError(msg) from None
@@ -518,8 +529,7 @@ def get_task_info(task_id: int) -> TaskInfo:
 
 def remove_task(task_id: int) -> None:
     """Remove a task and all its descendants from tracking to free memory."""
-    loop = asyncio.get_running_loop()
-    state = _loop_states[loop]
+    state = _get_state()
     if task_id not in state.task_infos:
         msg = f"No task with id {task_id!r} found in the current event loop."
         raise ValueError(msg)
@@ -531,6 +541,161 @@ def remove_task(task_id: int) -> None:
             continue
         state.task_ids.pop(task_info.task, None)
         stack.extend(task_info.subtasks)
+
+
+class _SyncNodeContext:
+    """Context manager that creates a tracked child node from sync code running in a thread."""
+
+    __slots__ = ("_name", "_auto_progress", "_task_id", "_parent_id", "_state")
+
+    def __init__(self, name: str, auto_progress: bool = True) -> None:
+        self._name = name
+        self._auto_progress = auto_progress
+        self._task_id: int = -1
+        self._parent_id: int = -1
+        self._state: _LoopState | None = None
+
+    def __enter__(self) -> TaskInfo:
+        try:
+            state = _get_state(create=False)
+        except (RuntimeError, KeyError):
+            msg = "sync_node requires an active aionode context. Use inside a function called from a @node-wrapped coroutine."
+            raise RuntimeError(msg) from None
+        self._state = state
+
+        try:
+            parent_id = _task_id.get()
+        except LookupError:
+            msg = "sync_node requires a parent task. Use inside a @node-wrapped context."
+            raise RuntimeError(msg) from None
+        self._parent_id = parent_id
+
+        task = _async_task.get()
+        task_id = state.allocate_id()
+        self._task_id = task_id
+
+        parent_info = state.task_infos[parent_id]
+        task_info = TaskInfo(
+            id=task_id,
+            task=task,
+            name=self._name,
+            parent=parent_id,
+            status=TaskStatus.RUNNING,
+            started_at=datetime.now(),
+            _start_mono=time.monotonic(),
+            auto_progress=self._auto_progress,
+            tree_depth=parent_info.tree_depth + 1,
+        )
+
+        state.task_infos[task_id] = task_info
+        with parent_info.sync_edit():
+            parent_info.subtasks = (*parent_info.subtasks, task_id)
+            parent_info.running_subtasks = (*parent_info.running_subtasks, task_id)
+            if parent_info.auto_progress:
+                parent_info.total = (parent_info.total or 0) + 1
+
+        _task_id.set(task_id)
+        return task_info
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        tb: Any,
+    ) -> bool:
+        assert self._state is not None
+        _mark_done(self._task_id, exc_val, self._state)
+        _task_id.set(self._parent_id)
+        return False
+
+
+class _SyncNodeDecorator(Protocol):
+    def __call__[**P, R](self, func: Callable[P, R], /) -> Callable[P, R]: ...
+
+
+@overload
+def sync_node[**P, R](
+    func: Callable[P, R],
+    /,
+    *,
+    name: str | Callable[..., str] | None = None,
+    auto_progress: bool = True,
+) -> Callable[P, R]: ...
+
+
+@overload
+def sync_node(
+    name: str,
+    /,
+    *,
+    auto_progress: bool = True,
+) -> _SyncNodeContext: ...
+
+
+@overload
+def sync_node(
+    *,
+    name: str | Callable[..., str] | None = None,
+    auto_progress: bool = True,
+) -> _SyncNodeDecorator: ...
+
+
+def sync_node(
+    func_or_name: Callable | str | None = None,
+    /,
+    *,
+    name: str | Callable[..., str] | None = None,
+    auto_progress: bool = True,
+) -> Any:
+    """Track a sync code block or function as a child node in the task tree.
+
+    Can be used as a context manager (primary), bare decorator, or decorator factory.
+
+    Context manager::
+
+        with sync_node("step_name"):
+            do_work()
+
+    Bare decorator (name from ``__name__``)::
+
+        @sync_node
+        def step(state): ...
+
+    Decorator with parameters::
+
+        @sync_node(name="custom")
+        def step(state): ...
+    """
+    if isinstance(func_or_name, str):
+        return _SyncNodeContext(name=func_or_name, auto_progress=auto_progress)
+
+    def _wrap(func: Callable) -> Callable:
+        _fallback_name = _get_callable_name(func)
+        _sig = inspect.signature(func)
+
+        def _resolve_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+            if callable(name) and not isinstance(name, str):
+                return name(*args, **kwargs)
+            if isinstance(name, str) and "{" in name:
+                bound = _sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+                return name.format(*args, **bound.arguments)
+            if isinstance(name, str):
+                return name
+            return _fallback_name
+
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            effective_name = _resolve_name(args, kwargs)
+            with _SyncNodeContext(name=effective_name, auto_progress=auto_progress):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    if callable(func_or_name):
+        return _wrap(func_or_name)
+
+    return _wrap
 
 
 def make_async[**P, T](
@@ -661,6 +826,7 @@ __all__ = [
     "node",
     "remove_task",
     "resolve",
+    "sync_node",
     "walk_dag",
     "walk_tree",
 ]
