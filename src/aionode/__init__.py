@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import TracebackType
 from typing import Any, Protocol, cast, overload, runtime_checkable
 
 __version__ = importlib.metadata.version("aionode")
@@ -483,8 +484,7 @@ async def _register_dep(from_id: int, to_id: int) -> None:
         if to_id not in from_info.deps:
             from_info.deps = (*from_info.deps, to_id)
         new_dag_depth = to_info.dag_depth + 1
-        if new_dag_depth > from_info.dag_depth:
-            from_info.dag_depth = new_dag_depth
+        from_info.dag_depth = max(from_info.dag_depth, new_dag_depth)
     async with to_info.edit():
         if from_id not in to_info.dependents:
             to_info.dependents = (*to_info.dependents, from_id)
@@ -553,7 +553,7 @@ def remove_task(task_id: int) -> None:
 class _SyncNodeContext:
     """Context manager that creates a tracked child node from sync code running in a thread."""
 
-    __slots__ = ("_name", "_auto_progress", "_task_id", "_parent_id", "_state")
+    __slots__ = ("_auto_progress", "_name", "_parent_id", "_state", "_task_id")
 
     def __init__(self, name: str, auto_progress: bool = True) -> None:
         self._name = name
@@ -608,7 +608,7 @@ class _SyncNodeContext:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        tb: Any,
+        tb: TracebackType | None,
     ) -> bool:
         assert self._state is not None
         _mark_done(self._task_id, exc_val, self._state)

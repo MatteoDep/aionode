@@ -33,5 +33,9 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+# TaskInfo.started_at/finished_at are naive local datetimes by design (public API).
+ignore = ["DTZ005"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]  # allow assert in tests

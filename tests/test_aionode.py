@@ -1147,10 +1147,7 @@ class TestCircularDeps:
                 a.cancel()
                 b.cancel()
 
-        try:
-            await asyncio.create_task(node(run)())
-        except BaseException:
-            pass
+        await asyncio.create_task(node(run)())
 
 
 # ---------------------------------------------------------------------------
@@ -1338,11 +1335,11 @@ class TestInlineNode:
         child_id_holder: list[int] = []
 
         async def child() -> int:
-            child_id_holder.append((await get_task_id(_current_task())))
+            child_id_holder.append(await get_task_id(_current_task()))
             return 42
 
         async def parent() -> None:
-            parent_id_holder.append((await get_task_id(_current_task())))
+            parent_id_holder.append(await get_task_id(_current_task()))
             result = await node(child)()
             assert result == 42
 
@@ -1763,9 +1760,8 @@ class TestSyncNodeContextManager:
 
     async def test_outside_aionode_context_raises(self) -> None:
         """sync_node outside any aionode context raises RuntimeError."""
-        with pytest.raises(RuntimeError, match="active aionode context"):
-            with sync_node("bad"):
-                pass
+        with pytest.raises(RuntimeError, match="active aionode context"), sync_node("bad"):
+            pass
 
     async def test_returns_task_info(self) -> None:
         """sync_node __enter__ returns the TaskInfo for the new node."""
