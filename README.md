@@ -57,6 +57,12 @@ summarize = tg.create_task(
 task_b = tg.create_task(aionode.node(cleanup, wait_for=[fetch])(), name="cleanup")
 ```
 
+While waiting on its dependencies a node is `WAITING`. If a dependency fails, the node is marked `FAILED` and raises `RuntimeError("Failed while waiting to start.")` chained to the upstream error.
+If a dependency is cancelled, or the node itself is cancelled while waiting, the node is marked `CANCELLED`.
+
+Cancelling a waiting node does not cancel dependencies that are tasks/futures, since they may be shared with other dependents.
+Bare coroutines passed to `resolve()` are owned by the node and are cancelled with it.
+
 ### `resolve(awaitable)`
 
 Marks an awaitable to be resolved before being passed as an argument to `node()`. This preserves type information — the type checker sees `resolve(task: Task[T])` as returning `T`.

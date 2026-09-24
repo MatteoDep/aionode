@@ -1007,6 +1007,117 @@ class TestErrorPropagation:
         with pytest.raises(ExceptionGroup):
             await asyncio.create_task(node(run)())
 
+    async def test_upstream_failure_marks_downstream_failed(self) -> None:
+        """A node whose dep fails is marked FAILED, not left WAITING."""
+
+        async def failing_fn() -> int:
+            msg = "upstream boom"
+            raise ValueError(msg)
+
+        async def downstream_fn(x: int) -> int:
+            return x + 1
+
+        up = asyncio.create_task(node(failing_fn, name="failing")())
+        down = asyncio.create_task(node(downstream_fn, name="downstream")(resolve(up)))
+        await asyncio.gather(up, down, return_exceptions=True)
+
+        info = get_task_info(await get_task_id(down))
+        assert info.status == TaskStatus.FAILED
+        assert isinstance(info.exception, RuntimeError)
+        assert isinstance(info.exception.__cause__, ValueError)
+        assert info.done()
+        assert not info.started()
+
+    async def test_upstream_cancel_marks_downstream_cancelled(self) -> None:
+        """A node whose dep is cancelled is marked CANCELLED, not left WAITING."""
+
+        async def slow_fn() -> None:
+            await asyncio.sleep(10)
+
+        async def downstream_fn() -> None:
+            pass
+
+        up = asyncio.create_task(node(slow_fn, name="slow")())
+        down = asyncio.create_task(node(downstream_fn, wait_for=[up], name="downstream")())
+        await asyncio.sleep(0.01)
+        up.cancel()
+        await asyncio.gather(up, down, return_exceptions=True)
+
+        info = get_task_info(await get_task_id(down))
+        assert info.status == TaskStatus.CANCELLED
+        assert info.done()
+
+    async def test_cancel_while_waiting_marks_cancelled(self) -> None:
+        """Cancelling a node still waiting on its deps marks it CANCELLED and leaves the dep running."""
+
+        async def slow_fn() -> None:
+            await asyncio.sleep(10)
+
+        async def downstream_fn() -> None:
+            pass
+
+        up = asyncio.create_task(node(slow_fn, name="slow")())
+        down = asyncio.create_task(node(downstream_fn, wait_for=[up], name="downstream")())
+        await asyncio.sleep(0.01)
+        down.cancel()
+        await asyncio.gather(down, return_exceptions=True)
+
+        info = get_task_info(await get_task_id(down))
+        assert info.status == TaskStatus.CANCELLED
+        assert info.done()
+        assert not up.done()
+        up.cancel()
+        await asyncio.gather(up, return_exceptions=True)
+
+    async def test_cancel_while_waiting_cancels_owned_coroutine(self) -> None:
+        """A bare coroutine passed to resolve() is owned by the node and cancelled with it."""
+        dep_cancelled = asyncio.Event()
+
+        async def slow_dep() -> int:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                dep_cancelled.set()
+                raise
+            return 1
+
+        async def downstream_fn(x: int) -> int:
+            return x
+
+        down = asyncio.create_task(node(downstream_fn, name="downstream")(resolve(slow_dep())))
+        await asyncio.sleep(0.01)
+        down.cancel()
+        await asyncio.gather(down, return_exceptions=True)
+
+        assert dep_cancelled.is_set()
+        assert get_task_info(await get_task_id(down)).status == TaskStatus.CANCELLED
+
+    async def test_inline_upstream_failure_restores_parent(self) -> None:
+        """Inline node failing while waiting is marked FAILED and restores _task_id to parent."""
+        from aionode import _task_id
+
+        async def failing_fn() -> int:
+            msg = "upstream boom"
+            raise ValueError(msg)
+
+        async def child_fn(x: int) -> int:
+            return x
+
+        child_ids: list[int] = []
+
+        async def parent() -> None:
+            parent_id = _task_id.get()
+            up = asyncio.create_task(node(failing_fn, name="failing")())
+            with pytest.raises(RuntimeError, match="waiting to start"):
+                await node(child_fn, name="child")(resolve(up))
+            assert _task_id.get() == parent_id
+            child_ids.extend(get_task_info(parent_id).subtasks)
+
+        await asyncio.create_task(node(parent)())
+
+        (child_info,) = (info for tid in child_ids if (info := get_task_info(tid)).name == "child")
+        assert child_info.status == TaskStatus.FAILED
+
 
 # ---------------------------------------------------------------------------
 # Circular dependency detection
@@ -1036,10 +1147,7 @@ class TestCircularDeps:
                 a.cancel()
                 b.cancel()
 
-        try:
-            await asyncio.create_task(node(run)())
-        except BaseException:
-            pass
+        await asyncio.create_task(node(run)())
 
 
 # ---------------------------------------------------------------------------
@@ -1227,11 +1335,11 @@ class TestInlineNode:
         child_id_holder: list[int] = []
 
         async def child() -> int:
-            child_id_holder.append((await get_task_id(_current_task())))
+            child_id_holder.append(await get_task_id(_current_task()))
             return 42
 
         async def parent() -> None:
-            parent_id_holder.append((await get_task_id(_current_task())))
+            parent_id_holder.append(await get_task_id(_current_task()))
             result = await node(child)()
             assert result == 42
 
@@ -1652,9 +1760,8 @@ class TestSyncNodeContextManager:
 
     async def test_outside_aionode_context_raises(self) -> None:
         """sync_node outside any aionode context raises RuntimeError."""
-        with pytest.raises(RuntimeError, match="active aionode context"):
-            with sync_node("bad"):
-                pass
+        with pytest.raises(RuntimeError, match="active aionode context"), sync_node("bad"):
+            pass
 
     async def test_returns_task_info(self) -> None:
         """sync_node __enter__ returns the TaskInfo for the new node."""
