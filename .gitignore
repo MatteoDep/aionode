@@ -7,5 +7,4 @@ wheels/
 *.egg-info
 
 .venv
-uv.lock
 /Session.vim
