@@ -125,6 +125,13 @@ def node(
                     if dep_task in state.task_ids:
                         await _register_dep(our_id, state.task_ids[dep_task])
 
+            def _finish(exc: BaseException | None) -> None:
+                if track:
+                    node_id = _task_id.get()
+                    _mark_done(node_id, exc, _get_state())
+                    if inline:
+                        _restore_parent_task_id(node_id)
+
             try:
                 if all_awaitables:
                     results = await asyncio.gather(*all_awaitables)
@@ -137,7 +144,12 @@ def node(
                     arg_results, kwarg_results = [], []
             except Exception as e:
                 msg = "Failed while waiting to start."
-                raise RuntimeError(msg) from e
+                err = RuntimeError(msg)
+                _finish(err)
+                raise err from e
+            except BaseException as exc:  # cancelled while waiting (self or dep)
+                _finish(exc)
+                raise
 
             # Rebuild args/kwargs with resolved values
             resolved_args = list(args)
@@ -153,18 +165,9 @@ def node(
                 result = func(*resolved_args, **resolved_kwargs)
                 retval = await result if inspect.isawaitable(result) else result
             except BaseException as exc:
-                if track:
-                    node_id = _task_id.get()
-                    _mark_done(node_id, exc, _get_state())
-                    if inline:
-                        _restore_parent_task_id(node_id)
+                _finish(exc)
                 raise
-            else:
-                if track:
-                    node_id = _task_id.get()
-                    _mark_done(node_id, None, _get_state())
-                    if inline:
-                        _restore_parent_task_id(node_id)
+            _finish(None)
             return retval
 
         return wrapper
