@@ -134,7 +134,11 @@ def node(
 
             try:
                 if all_awaitables:
-                    results = await asyncio.gather(*all_awaitables)
+                    # Shield futures/tasks: they may be shared with other dependents, so cancelling
+                    # this node must not cancel them. Bare coroutines are owned by this node.
+                    results = await asyncio.gather(
+                        *(asyncio.shield(a) if isinstance(a, asyncio.Future) else a for a in all_awaitables)
+                    )
                     n_args = len(resolved_arg_idxs)
                     n_kw = len(resolved_kwarg_keys)
                     arg_results = list(results[:n_args])

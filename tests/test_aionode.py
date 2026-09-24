@@ -1047,6 +1047,51 @@ class TestErrorPropagation:
         assert info.status == TaskStatus.CANCELLED
         assert info.done()
 
+    async def test_cancel_while_waiting_marks_cancelled(self) -> None:
+        """Cancelling a node still waiting on its deps marks it CANCELLED and leaves the dep running."""
+
+        async def slow_fn() -> None:
+            await asyncio.sleep(10)
+
+        async def downstream_fn() -> None:
+            pass
+
+        up = asyncio.create_task(node(slow_fn, name="slow")())
+        down = asyncio.create_task(node(downstream_fn, wait_for=[up], name="downstream")())
+        await asyncio.sleep(0.01)
+        down.cancel()
+        await asyncio.gather(down, return_exceptions=True)
+
+        info = get_task_info(await get_task_id(down))
+        assert info.status == TaskStatus.CANCELLED
+        assert info.done()
+        assert not up.done()
+        up.cancel()
+        await asyncio.gather(up, return_exceptions=True)
+
+    async def test_cancel_while_waiting_cancels_owned_coroutine(self) -> None:
+        """A bare coroutine passed to resolve() is owned by the node and cancelled with it."""
+        dep_cancelled = asyncio.Event()
+
+        async def slow_dep() -> int:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                dep_cancelled.set()
+                raise
+            return 1
+
+        async def downstream_fn(x: int) -> int:
+            return x
+
+        down = asyncio.create_task(node(downstream_fn, name="downstream")(resolve(slow_dep())))
+        await asyncio.sleep(0.01)
+        down.cancel()
+        await asyncio.gather(down, return_exceptions=True)
+
+        assert dep_cancelled.is_set()
+        assert get_task_info(await get_task_id(down)).status == TaskStatus.CANCELLED
+
     async def test_inline_upstream_failure_restores_parent(self) -> None:
         """Inline node failing while waiting is marked FAILED and restores _task_id to parent."""
         from aionode import _task_id
